@@ -1,0 +1,22 @@
+# ----- Python / Django (backend) -----
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+db.sqlite3
+.env
+staticfiles/
+media/
+
+# ----- Flutter (extra safety; mobile/.gitignore covers most) -----
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# ----- Editors / OS -----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
