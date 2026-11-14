@@ -1,12 +1,14 @@
 
 import 'dart:async';
 import 'api_service.dart';
+import 'login_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:pedometer/pedometer.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:uuid/uuid.dart';
 
 void main() {
   runApp(const MyApp());
@@ -23,7 +25,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
-      home: const LocationPage(),
+      home: const LoginPage(),
     );
   }
 }
@@ -66,6 +68,105 @@ class _LocationPageState extends State<LocationPage> {
   bool isTracking = false;
 
   String statusMessage = 'Ready to run';
+
+  // ----- Backend submission -----
+  // Player's point balance from the server
+  int? totalPoints;
+
+  // A finished run that has not been accepted by the server yet.
+  // The session id is kept so retrying never awards points twice.
+  String? pendingSessionId;
+  double pendingDistance = 0;
+  int pendingSteps = 0;
+  int pendingDuration = 0;
+
+  bool isSubmitting = false;
+  String? submitError;
+  Map<String, dynamic>? lastResult;
+
+  @override
+  void initState() {
+    super.initState();
+    loadStats();
+  }
+
+  Future<void> loadStats() async {
+    try {
+      final stats = await ApiService.getStats();
+      if (!mounted) return;
+      setState(() => totalPoints = stats['total_points'] as int?);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.statusCode == 401) {
+        goToLogin();
+      } else {
+        setState(() => submitError = e.message);
+      }
+    }
+  }
+
+  Future<void> submitRun() async {
+    final sessionId = pendingSessionId;
+    if (sessionId == null) return;
+
+    setState(() {
+      isSubmitting = true;
+      submitError = null;
+      statusMessage = 'Saving your run...';
+    });
+
+    try {
+      final result = await ApiService.finishSession(
+        sessionId: sessionId,
+        distanceMeters: pendingDistance,
+        steps: pendingSteps,
+        durationSeconds: pendingDuration,
+      );
+      if (!mounted) return;
+      setState(() {
+        lastResult = result;
+        totalPoints = result['total_points'] as int?;
+        pendingSessionId = null;
+        statusMessage = 'Run saved!';
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (e.statusCode == 400) {
+          // The server rejected this run; retrying won't help.
+          pendingSessionId = null;
+          submitError = 'Run not accepted: ${e.message}';
+        } else {
+          // Network/server problem: keep the run so it can be retried.
+          submitError = e.message;
+        }
+        statusMessage = 'Run not saved';
+      });
+    } finally {
+      if (mounted) setState(() => isSubmitting = false);
+    }
+  }
+
+  void discardPendingRun() {
+    setState(() {
+      pendingSessionId = null;
+      submitError = null;
+      statusMessage = 'Ready to run';
+    });
+  }
+
+  void goToLogin() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+    );
+  }
+
+  Future<void> logout() async {
+    if (isTracking) await stopTracking(submit: false);
+    await ApiService.logout();
+    if (!mounted) return;
+    goToLogin();
+  }
 
   // Start step counter
   Future<bool> startStepCounter() async {
@@ -143,6 +244,8 @@ class _LocationPageState extends State<LocationPage> {
     gpsWatchdogTimer = null;
 
     setState(() {
+      lastResult = null;
+      submitError = null;
       statusMessage = 'Preparing tracking...';
       gpsUpdateCount = 0;
       totalDistance = 0;
@@ -395,7 +498,7 @@ class _LocationPageState extends State<LocationPage> {
   }
 
   // Stop tracking
-  Future<void> stopTracking() async {
+  Future<void> stopTracking({bool submit = true}) async {
     // Cancel watchdog
     gpsWatchdogTimer?.cancel();
     gpsWatchdogTimer = null;
@@ -409,9 +512,9 @@ class _LocationPageState extends State<LocationPage> {
     displayTimer?.cancel();
     displayTimer = null;
 
-    int duration = DateTime.now()
-        .difference(runStartTime!)
-        .inSeconds;
+    int duration = runStartTime == null
+        ? 0
+        : DateTime.now().difference(runStartTime!).inSeconds;
 
     setState(() {
       isTracking = false;
@@ -425,6 +528,16 @@ class _LocationPageState extends State<LocationPage> {
     print('Distance: $totalDistance meters');
     print('Steps: $totalSteps');
     print('Duration: $duration seconds');
+
+    if (!submit) return;
+
+    // Keep the run (and a fixed session id) until the server accepts it.
+    pendingSessionId = const Uuid().v4();
+    pendingDistance = totalDistance;
+    pendingSteps = totalSteps;
+    pendingDuration = duration;
+
+    await submitRun();
   }
 
   // Distance in kilometers
@@ -438,10 +551,8 @@ class _LocationPageState extends State<LocationPage> {
       return '00:00';
     }
 
-    final duration = DateTime.now().difference(runStartTime!);
-
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
+    final minutes = elapsedSeconds ~/ 60;
+    final seconds = elapsedSeconds % 60;
 
     return '${minutes.toString().padLeft(2, '0')}:'
         '${seconds.toString().padLeft(2, '0')}';
@@ -461,8 +572,15 @@ class _LocationPageState extends State<LocationPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Running Game'),
+        title: Text(ApiService.username ?? 'Running Game'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'Log out',
+            icon: const Icon(Icons.logout),
+            onPressed: isSubmitting ? null : logout,
+          ),
+        ],
       ),
 
       body: Center(
@@ -473,6 +591,17 @@ class _LocationPageState extends State<LocationPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Point balance
+                Chip(
+                  avatar: const Icon(Icons.stars, color: Colors.amber),
+                  label: Text(
+                    totalPoints == null ? 'Points: ...' : 'Points: $totalPoints',
+                    style: const TextStyle(fontSize: 18),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
                 const Icon(
                   Icons.directions_run,
                   size: 70,
@@ -565,11 +694,79 @@ class _LocationPageState extends State<LocationPage> {
 
                 const SizedBox(height: 25),
 
+                // Reward from the server
+                if (lastResult != null)
+                  Card(
+                    color: Colors.green.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          Text(
+                            '+${lastResult!['points_earned']} points',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
+                          Text('for ${lastResult!['session_distance']} m'),
+                          if (lastResult!['already_processed'] == true)
+                            const Text('(this run was already saved)'),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // Submission error with retry
+                if (submitError != null)
+                  Card(
+                    color: Colors.red.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        children: [
+                          Text(
+                            submitError!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.red.shade900),
+                          ),
+                          if (pendingSessionId != null)
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                TextButton(
+                                  onPressed: isSubmitting ? null : submitRun,
+                                  child: const Text('Retry'),
+                                ),
+                                TextButton(
+                                  onPressed:
+                                      isSubmitting ? null : discardPendingRun,
+                                  child: const Text('Discard run'),
+                                ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                if (isSubmitting)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: CircularProgressIndicator(),
+                  ),
+
+                const SizedBox(height: 10),
+
                 // Start / Stop button
+                // (disabled while a finished run is waiting to be saved)
                 ElevatedButton.icon(
-                  onPressed: isTracking
-                      ? stopTracking
-                      : startTracking,
+                  onPressed: isSubmitting || (!isTracking && pendingSessionId != null)
+                      ? null
+                      : isTracking
+                          ? stopTracking
+                          : startTracking,
 
                   icon: Icon(
                     isTracking

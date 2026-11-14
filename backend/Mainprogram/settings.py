@@ -79,7 +79,13 @@ REST_FRAMEWORK = {
     ]
 }
 WSGI_APPLICATION = 'Mainprogram.wsgi.application'
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "10.0.2.2"]
+# During development, accept any host so a real phone can reach the server
+# through your PC's Wi-Fi IP (which changes between networks).
+# Lock this down before deploying (Week 15).
+if DEBUG:
+    ALLOWED_HOSTS = ["*"]
+else:
+    ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
 
 
 # Database
