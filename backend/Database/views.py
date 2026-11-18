@@ -1,7 +1,23 @@
-from django.contrib.auth.models import Group, User
-from rest_framework import permissions, viewsets
+from decimal import Decimal
 
-from .serializers import GroupSerializer, UserSerializer
+from django.contrib.auth.models import Group, User
+from django.db import transaction
+from rest_framework import permissions, status, viewsets
+from rest_framework.authtoken.models import Token
+from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import UserActivity, WalkingSession
+from .serializers import (
+    FinishSessionSerializer,
+    GroupSerializer,
+    RegisterSerializer,
+    UserSerializer,
+    WalkingSessionSerializer,
+)
+from .utils import convert_distance_to_points
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -23,103 +39,124 @@ class GroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+# ----- Accounts -----
 
-from .models import UserActivity, WalkingSession
-from .utils import convert_distance_to_points
+class RegisterView(APIView):
+    """POST {username, password} -> {token, username}"""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response(
+            {"token": token.key, "username": user.username},
+            status=status.HTTP_201_CREATED,
+        )
 
 
-class FinishSessionView(APIView):
+class LoginView(ObtainAuthToken):
+    """POST {username, password} -> {token, username}"""
+
+    authentication_classes = []
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.serializer_class(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data["user"]
+        token, _ = Token.objects.get_or_create(user=user)
+        UserActivity.objects.get_or_create(user=user)
+        return Response({"token": token.key, "username": user.username})
+
+
+class LogoutView(APIView):
+    """POST -> deletes the current token so it can't be reused."""
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        Token.objects.filter(user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-        try:
-            session_id = request.data["session_id"]
-            distance = Decimal(str(request.data["distance"]))
 
-            if not distance.is_finite() or distance < 0:
-                raise ValueError()
+# ----- Activity -----
 
-        except (KeyError, InvalidOperation, ValueError, TypeError):
-            return Response(
-                {"error": "Invalid session data"},
-                status=400
-            )
+class FinishSessionView(APIView):
+    """
+    POST {session_id, distance, steps, duration_seconds}
 
+    Sending the same session_id twice never awards points twice, so the app
+    can safely retry if the network drops.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = FinishSessionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        distance = data["distance"]
         points = convert_distance_to_points(distance)
 
         with transaction.atomic():
-
-            activity, _ = UserActivity.objects.get_or_create(
-                user=request.user
-            )
-
+            UserActivity.objects.get_or_create(user=request.user)
             activity = UserActivity.objects.select_for_update().get(
                 user=request.user
             )
 
             session, created = WalkingSession.objects.get_or_create(
-                session_id=session_id,
+                session_id=data["session_id"],
                 defaults={
                     "user": request.user,
                     "distance": distance,
-                    "points_earned": points
-                }
+                    "steps": data["steps"],
+                    "duration_seconds": data["duration_seconds"],
+                    "points_earned": points,
+                },
             )
 
             if not created:
                 if session.user_id != request.user.id:
                     return Response(
                         {"error": "Invalid session"},
-                        status=403
+                        status=status.HTTP_403_FORBIDDEN,
                     )
-
-                return Response({
-                    "message": "Session already processed",
-                    "points_earned": session.points_earned
-                })
-
-            activity.total_distance += distance
-            activity.total_points += points
-            activity.save()
+            else:
+                activity.total_distance += distance
+                activity.total_steps += data["steps"]
+                activity.total_points += points
+                activity.save()
 
         return Response({
-            "session_distance": str(distance),
-            "points_earned": points,
+            "already_processed": not created,
+            "session_distance": str(session.distance),
+            "points_earned": session.points_earned,
             "total_distance": str(activity.total_distance),
-            "total_points": activity.total_points
-
+            "total_points": activity.total_points,
         })
+
+
 class ActivityHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         activity = UserActivity.objects.filter(user=request.user).first()
-
-        sessions = (
-            WalkingSession.objects
-            .filter(user=request.user)
-            .order_by("-id")
-        )
+        sessions = WalkingSession.objects.filter(user=request.user).order_by("-id")
 
         return Response({
             "total_distance": str(activity.total_distance) if activity else "0",
             "total_points": activity.total_points if activity else 0,
-            "sessions": [
-                {
-                    "session_id": s.session_id,
-                    "distance": str(s.distance),
-                    "points_earned": s.points_earned,
-                }
-                for s in sessions
-            ],
+            "sessions": WalkingSessionSerializer(sessions, many=True).data,
         })
+
+
 class PlayerStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -138,7 +175,9 @@ class PlayerStatsView(APIView):
             "total_distance": str(total_distance),
             "total_points": total_points,
             "sessions_completed": session_count,
-            "average_distance": str(total_distance / session_count) if session_count else "0",
+            "average_distance": (
+                str(round(total_distance / session_count, 2)) if session_count else "0"
+            ),
             "longest_session": str(best.distance) if best else "0",
         })
 

@@ -36,6 +36,8 @@ class WalkingSession(models.Model):
 
     steps = models.PositiveIntegerField(default=0)
 
+    duration_seconds = models.PositiveIntegerField(default=0)
+
     points_earned = models.PositiveIntegerField(default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
