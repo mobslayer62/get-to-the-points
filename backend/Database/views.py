@@ -141,3 +141,25 @@ class PlayerStatsView(APIView):
             "average_distance": str(total_distance / session_count) if session_count else "0",
             "longest_session": str(best.distance) if best else "0",
         })
+
+class CardStorageView(APIView):
+    """GET the logged-in user's card collection."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import UserCard
+        from .serializers import UserCardSerializer
+
+        cards = (
+            UserCard.objects
+            .filter(user=request.user)
+            .select_related("card")
+            .order_by("card__name")
+        )
+
+        return Response({
+            "unique_cards": cards.count(),
+            "total_cards": sum(c.quantity for c in cards),
+            "cards": UserCardSerializer(cards, many=True).data,
+        })

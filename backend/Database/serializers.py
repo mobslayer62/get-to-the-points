@@ -1,6 +1,6 @@
 from django.contrib.auth.models import Group, User
 from rest_framework import serializers
-from .models import UserActivity, WalkingSession
+from .models import UserActivity, WalkingSession, UserCard
 
 
 class UserSerializer(serializers.HyperlinkedModelSerializer):
@@ -42,4 +42,24 @@ class UserActivitySerializer(serializers.ModelSerializer):
             "total_distance",
             "total_steps",
             "total_points"
+        ]
+
+
+class UserCardSerializer(serializers.ModelSerializer):
+    card_id = serializers.IntegerField(source="card.id", read_only=True)
+    name = serializers.CharField(source="card.name", read_only=True)
+    description = serializers.CharField(source="card.description", read_only=True)
+    rarity = serializers.CharField(source="card.rarity", read_only=True)
+    image_url = serializers.CharField(source="card.image_url", read_only=True)
+
+    class Meta:
+        model = UserCard
+        fields = [
+            "card_id",
+            "name",
+            "description",
+            "rarity",
+            "image_url",
+            "quantity",
+            "first_obtained_at",
         ]

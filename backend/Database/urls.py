@@ -8,6 +8,7 @@ from .views import (
     FinishSessionView,
     ActivityHistoryView,
     PlayerStatsView,
+    CardStorageView,
 )
 
 router = routers.DefaultRouter()
@@ -19,5 +20,6 @@ urlpatterns = [
     path("finish-session/", FinishSessionView.as_view(), name="finish-session"),
     path("activity-history/", ActivityHistoryView.as_view(), name="activity-history"),
     path("player-stats/", PlayerStatsView.as_view(), name="player-stats"),
+    path("card-storage/", CardStorageView.as_view(), name="card-storage"),
     path("login/", obtain_auth_token, name="api-login"),
 ]
