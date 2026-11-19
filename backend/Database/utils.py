@@ -75,3 +75,40 @@ def add_card_to_storage(user, card):
             user_card.refresh_from_db()
 
     return user_card, created
+
+
+# ----- Main menu -----
+
+RECENT_SESSIONS_ON_HOME = 3
+
+
+def build_home_summary(user):
+    """
+    Everything the main menu shows, in one response, so the app
+    makes a single request when the menu opens.
+    """
+    from .models import Card, UserActivity, UserCard, WalkingSession
+
+    activity = UserActivity.objects.filter(user=user).first()
+    sessions = WalkingSession.objects.filter(user=user).order_by("-created_at", "-id")
+
+    recent = [
+        {
+            "distance": str(s.distance),
+            "points_earned": s.points_earned,
+            "created_at": s.created_at.isoformat(),
+        }
+        for s in sessions[:RECENT_SESSIONS_ON_HOME]
+    ]
+
+    return {
+        "username": user.username,
+        "total_points": activity.total_points if activity else 0,
+        "total_distance": str(activity.total_distance) if activity else "0",
+        "sessions_completed": sessions.count(),
+        "recent_sessions": recent,
+        "cards": {
+            "unique_owned": UserCard.objects.filter(user=user).count(),
+            "catalog_size": Card.objects.count(),
+        },
+    }

@@ -218,3 +218,63 @@ class CardStorageTests(TestCase):
         self.assertEqual(res.data["total_cards"], 3)
         fire = next(c for c in res.data["cards"] if c["name"] == "Fire Dragon")
         self.assertEqual(fire["quantity"], 2)
+
+
+class HomeSummaryApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("runner1", password=STRONG_PASSWORD)
+        token = Token.objects.create(user=self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def post_run(self, distance):
+        return self.client.post(
+            "/api/finish-session/",
+            {
+                "session_id": str(uuid.uuid4()),
+                "distance": distance,
+                "steps": 100,
+                "duration_seconds": 900,
+            },
+            format="json",
+        )
+
+    def test_requires_login(self):
+        self.client.credentials()
+        self.assertEqual(self.client.get("/api/home/").status_code, 401)
+
+    def test_new_player_gets_empty_summary(self):
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["username"], "runner1")
+        self.assertEqual(res.data["total_points"], 0)
+        self.assertEqual(res.data["sessions_completed"], 0)
+        self.assertEqual(res.data["recent_sessions"], [])
+        self.assertEqual(res.data["cards"], {"unique_owned": 0, "catalog_size": 0})
+
+    def test_points_and_recent_runs_newest_first(self):
+        for distance in ["100.00", "200.00", "300.00", "400.00"]:
+            self.post_run(distance)
+
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.data["total_points"], 100)
+        self.assertEqual(res.data["sessions_completed"], 4)
+        self.assertEqual(
+            [s["distance"] for s in res.data["recent_sessions"]],
+            ["400.00", "300.00", "200.00"],
+        )
+
+    def test_card_counts(self):
+        owned = Card.objects.create(name="Morning Jogger", rarity="A")
+        Card.objects.create(name="Campus Sprinter", rarity="S")
+        add_card_to_storage(self.user, owned)
+        add_card_to_storage(self.user, owned)
+
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.data["cards"], {"unique_owned": 1, "catalog_size": 2})
+
+    def test_only_own_data(self):
+        other = User.objects.create_user("runner2", password=STRONG_PASSWORD)
+        WalkingSession.objects.create(user=other, distance=Decimal("500"), points_earned=50)
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.data["sessions_completed"], 0)

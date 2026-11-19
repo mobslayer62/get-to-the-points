@@ -202,3 +202,14 @@ class CardStorageView(APIView):
             "total_cards": sum(c.quantity for c in cards),
             "cards": UserCardSerializer(cards, many=True).data,
         })
+
+
+class HomeSummaryView(APIView):
+    """GET everything the main menu needs in one request."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .utils import build_home_summary
+
+        return Response(build_home_summary(request.user))
