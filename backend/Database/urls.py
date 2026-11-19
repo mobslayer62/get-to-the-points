@@ -11,6 +11,7 @@ from .views import (
     ActivityHistoryView,
     PlayerStatsView,
     CardStorageView,
+    HomeSummaryView,
 )
 
 router = routers.DefaultRouter()
@@ -26,4 +27,5 @@ urlpatterns = [
     path("activity-history/", ActivityHistoryView.as_view(), name="activity-history"),
     path("player-stats/", PlayerStatsView.as_view(), name="player-stats"),
     path("card-storage/", CardStorageView.as_view(), name="card-storage"),
+    path("home/", HomeSummaryView.as_view(), name="home-summary"),
 ]

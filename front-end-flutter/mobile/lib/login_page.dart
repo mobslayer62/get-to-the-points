@@ -1,7 +1,16 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
-import 'main.dart';
+import 'home_page.dart';
+
+/// Sends the player back to the login screen and clears every screen
+/// behind it, so the back button can't return to a logged-out menu.
+void goToLoginScreen(BuildContext context) {
+  Navigator.of(context).pushAndRemoveUntil(
+    MaterialPageRoute(builder: (_) => const LoginPage()),
+    (route) => false,
+  );
+}
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -48,7 +57,7 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LocationPage()),
+        MaterialPageRoute(builder: (_) => const MainMenuPage()),
       );
     } on ApiException catch (e) {
       if (!mounted) return;

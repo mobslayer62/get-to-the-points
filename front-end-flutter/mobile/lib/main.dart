@@ -155,18 +155,7 @@ class _LocationPageState extends State<LocationPage> {
     });
   }
 
-  void goToLogin() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-    );
-  }
-
-  Future<void> logout() async {
-    if (isTracking) await stopTracking(submit: false);
-    await ApiService.logout();
-    if (!mounted) return;
-    goToLogin();
-  }
+  void goToLogin() => goToLoginScreen(context);
 
   // Start step counter
   Future<bool> startStepCounter() async {
@@ -570,17 +559,24 @@ class _LocationPageState extends State<LocationPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // Leaving this screen mid-run (or with an unsaved run) would lose it.
+    final canLeave = !isTracking && !isSubmitting && pendingSessionId == null;
+
+    return PopScope(
+      canPop: canLeave,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Stop the run, or save or discard it, before leaving.'),
+            ),
+          );
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
-        title: Text(ApiService.username ?? 'Running Game'),
+        title: const Text('Run'),
         centerTitle: true,
-        actions: [
-          IconButton(
-            tooltip: 'Log out',
-            icon: const Icon(Icons.logout),
-            onPressed: isSubmitting ? null : logout,
-          ),
-        ],
       ),
 
       body: Center(
@@ -785,6 +781,7 @@ class _LocationPageState extends State<LocationPage> {
           ),
         ),
       ),
+    ),
     );
   }
 }

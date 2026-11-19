@@ -107,6 +107,21 @@ class ApiService {
         ));
   }
 
+  /// Everything the main menu shows, in one request.
+  static Future<Map<String, dynamic>> getHome() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/home/'),
+          headers: _headers,
+        ));
+  }
+
+  static Future<Map<String, dynamic>> getCardStorage() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/card-storage/'),
+          headers: _headers,
+        ));
+  }
+
   // ----- Helpers -----
 
   static Future<Map<String, dynamic>> _send(
