@@ -37,12 +37,16 @@ class WalkingSessionAdmin(admin.ModelAdmin):
 
 @admin.register(Card)
 class CardAdmin(admin.ModelAdmin):
-    list_display = ["name", "rarity", "effect_type", "effect_value"]
-    list_filter = ["rarity", "effect_type"]
+    list_display = [
+        "name", "rarity", "effect_type", "effect_value",
+        "special_type", "special_value", "special_threshold",
+    ]
+    list_filter = ["rarity", "effect_type", "special_type"]
     search_fields = ["name"]
     fieldsets = [
         (None, {"fields": ["name", "description", "rarity", "image_url"]}),
-        ("Benefit when equipped", {"fields": ["effect_type", "effect_value"]}),
+        ("Passive", {"fields": ["effect_type", "effect_value"]}),
+        ("Special", {"fields": ["special_type", "special_value", "special_threshold"]}),
     ]
 
 

@@ -42,6 +42,11 @@ class WalkingSession(models.Model):
     points_earned = models.PositiveIntegerField(default=0)
     bonus_points = models.PositiveIntegerField(default=0)
 
+    # Per-card bonus breakdown worked out when the run was saved. Stored
+    # because some specials depend on the player's lifetime distance at
+    # that moment, which can't be recomputed later.
+    card_bonus_breakdown = models.JSONField(default=list, blank=True)
+
     # Snapshot of the player's loadout when this session was saved, so
     # card benefits can be worked out (or audited) per session later.
     equipped_cards = models.ManyToManyField(
@@ -70,15 +75,21 @@ class Card(models.Model):
     )
     image_url = models.URLField(blank=True)
 
-    # What the card does when equipped for a run.
-    # Placeholder effects for now; add new types here as benefits are designed
-    # (and handle them in utils.calculate_card_bonuses).
+    # What the card does when equipped for a run. A card has up to two
+    # benefits: a passive (effect_*) and a special (special_*). Both are
+    # worked out in utils.calculate_card_bonuses; add new types there too.
     EFFECT_NONE = "none"
+
+    # ----- Passive -----
     EFFECT_POINTS_PERCENT = "points_percent"
+    EFFECT_WALK_POINTS_PERCENT = "walk_points_percent"
+    EFFECT_RUN_POINTS_PERCENT = "run_points_percent"
     EFFECT_FLAT_POINTS = "flat_points"
     EFFECT_CHOICES = [
         (EFFECT_NONE, "No effect"),
         (EFFECT_POINTS_PERCENT, "+% of the run's base points"),
+        (EFFECT_WALK_POINTS_PERCENT, "+% of the run's base points (walks only)"),
+        (EFFECT_RUN_POINTS_PERCENT, "+% of the run's base points (runs only)"),
         (EFFECT_FLAT_POINTS, "+flat points per run"),
     ]
 
@@ -90,9 +101,40 @@ class Card(models.Model):
     effect_value = models.PositiveIntegerField(
         default=0,
         help_text=(
-            "For '+% points': the percent, e.g. 25 = +25% of the run's base "
+            "For the '+%' types: the percent, e.g. 25 = +25% of the run's base "
             "points. For '+flat points': points added per run. "
             "Ignored for 'No effect'."
+        ),
+    )
+
+    # ----- Special -----
+    SPECIAL_DISTANCE_MILESTONE = "distance_milestone"
+    SPECIAL_WALK_DISTANCE = "walk_distance"
+    SPECIAL_RUN_DISTANCE = "run_distance"
+    SPECIAL_MIN_DURATION = "min_duration"
+    SPECIAL_CHOICES = [
+        (EFFECT_NONE, "No special"),
+        (SPECIAL_DISTANCE_MILESTONE,
+         "+points every time total (lifetime) distance passes another X m"),
+        (SPECIAL_WALK_DISTANCE, "+points per X m walked in the run (walks only)"),
+        (SPECIAL_RUN_DISTANCE, "+points per X m run in the session (runs only)"),
+        (SPECIAL_MIN_DURATION, "+points if the run lasts at least X minutes"),
+    ]
+
+    special_type = models.CharField(
+        max_length=30,
+        choices=SPECIAL_CHOICES,
+        default=EFFECT_NONE
+    )
+    special_value = models.PositiveIntegerField(
+        default=0,
+        help_text="Points the special grants each time it triggers.",
+    )
+    special_threshold = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "The X in the special: metres for the distance specials "
+            "(5000 = every 5 km), minutes for 'lasts at least'."
         ),
     )
 

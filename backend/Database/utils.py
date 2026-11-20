@@ -9,6 +9,10 @@ from decimal import Decimal, ROUND_FLOOR
 # ----- Economy -----
 METERS_PER_POINT = Decimal("10")  # 10 points per 100 m
 
+# Average speed at or below this counts as walking (for walk-only card
+# effects). 2.0 m/s = 7.2 km/h, roughly a very brisk walk.
+WALK_MAX_SPEED_MPS = Decimal("2.0")
+
 # ----- Plausibility limits for a single session -----
 MAX_SESSION_DISTANCE_M = Decimal("50000")  # 50 km in one session
 MAX_AVERAGE_SPEED_MPS = Decimal("7")       # ~25 km/h, faster than any realistic jog/run average
@@ -22,38 +26,100 @@ def convert_distance_to_points(distance, multiplier=1):
     return int(points.to_integral_value(rounding=ROUND_FLOOR))
 
 
-def calculate_card_bonuses(base_points, cards):
+def is_walk(distance, duration_seconds):
+    """
+    A run counts as a walk when its average speed is at walking pace.
+    Runs with no duration can't be timed, so they count as walks.
+    """
+    if duration_seconds <= 0:
+        return True
+    return Decimal(str(distance)) / Decimal(duration_seconds) <= WALK_MAX_SPEED_MPS
+
+
+def _floor(value):
+    return int(Decimal(value).to_integral_value(rounding=ROUND_FLOOR))
+
+
+def calculate_card_bonuses(
+    base_points,
+    cards,
+    *,
+    distance=0,
+    duration_seconds=0,
+    previous_total_distance=0,
+):
     """
     Work out the bonus points each equipped card adds to a run.
 
-    - points_percent: floor(base_points * value / 100), per card
-    - flat_points:    + value
+    Passive (effect_type / effect_value):
+    - points_percent:      floor(base_points * value / 100)
+    - walk_points_percent: same, but only if the run is a walk
+    - run_points_percent:  same, but only if the run is NOT a walk
+    - flat_points:         + value
     Percent bonuses are all based on the run's base points (they don't
     compound), so the order cards are equipped in doesn't matter.
 
-    Returns (total_bonus, [{"card_id", "name", "effect_type",
-    "effect_value", "bonus"}, ...]) with one entry per card.
+    Special (special_type / special_value / special_threshold = X):
+    - distance_milestone: + value for every multiple of X m that the
+                          player's lifetime distance passes during this run
+    - walk_distance:      + value per full X m of this run, walks only
+    - run_distance:       + value per full X m of this run, runs only
+    - min_duration:       + value if the run lasted at least X minutes
+
+    `previous_total_distance` is the player's lifetime distance before this
+    run. Returns (total_bonus, breakdown) with one dict per card.
     """
     from .models import Card
 
+    distance = Decimal(str(distance))
+    previous_total = Decimal(str(previous_total_distance))
+    walk = is_walk(distance, duration_seconds)
+
     breakdown = []
     for card in cards:
-        if card.effect_type == Card.EFFECT_POINTS_PERCENT:
-            bonus = int(
-                (Decimal(base_points) * Decimal(card.effect_value) / Decimal(100))
-                .to_integral_value(rounding=ROUND_FLOOR)
-            )
-        elif card.effect_type == Card.EFFECT_FLAT_POINTS:
-            bonus = card.effect_value
+        # ----- Passive -----
+        effect = card.effect_type
+        if (
+            effect == Card.EFFECT_POINTS_PERCENT
+            or (effect == Card.EFFECT_WALK_POINTS_PERCENT and walk)
+            or (effect == Card.EFFECT_RUN_POINTS_PERCENT and not walk)
+        ):
+            passive = _floor(Decimal(base_points) * card.effect_value / Decimal(100))
+        elif effect == Card.EFFECT_FLAT_POINTS:
+            passive = card.effect_value
         else:
-            bonus = 0
+            passive = 0
+
+        # ----- Special -----
+        special_type = card.special_type
+        threshold = card.special_threshold
+        special = 0
+        if threshold > 0:
+            if special_type == Card.SPECIAL_DISTANCE_MILESTONE:
+                passed = (
+                    _floor((previous_total + distance) / threshold)
+                    - _floor(previous_total / threshold)
+                )
+                special = passed * card.special_value
+            elif (special_type == Card.SPECIAL_WALK_DISTANCE and walk) or (
+                special_type == Card.SPECIAL_RUN_DISTANCE and not walk
+            ):
+                special = _floor(distance / threshold) * card.special_value
+            elif special_type == Card.SPECIAL_MIN_DURATION:
+                if duration_seconds >= threshold * 60:
+                    special = card.special_value
 
         breakdown.append({
             "card_id": card.id,
             "name": card.name,
             "effect_type": card.effect_type,
             "effect_value": card.effect_value,
-            "bonus": bonus,
+            "special_type": card.special_type,
+            "special_value": card.special_value,
+            "special_threshold": card.special_threshold,
+            "passive_bonus": passive,
+            "special_bonus": special,
+            "bonus": passive + special,
         })
 
     return sum(b["bonus"] for b in breakdown), breakdown

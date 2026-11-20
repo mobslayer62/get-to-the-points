@@ -99,9 +99,12 @@ class _CardsPageState extends State<CardsPage> {
                       Text('x${c['quantity']}'),
                     ],
                   ),
-                  const Spacer(),
-                  Icon(Icons.style, size: 48, color: color),
-                  const Spacer(),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: CardArt(card: c, color: color, iconSize: 48),
+                    ),
+                  ),
                   Text(
                     c['name'] as String? ?? '',
                     style: const TextStyle(
