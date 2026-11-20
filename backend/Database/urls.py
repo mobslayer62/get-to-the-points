@@ -7,11 +7,13 @@ from .views import (
     RegisterView,
     LoginView,
     LogoutView,
+    StartSessionView,
     FinishSessionView,
     ActivityHistoryView,
     PlayerStatsView,
     CardStorageView,
     HomeSummaryView,
+    EquippedCardsView,
 )
 
 router = routers.DefaultRouter()
@@ -23,9 +25,11 @@ urlpatterns = [
     path("register/", RegisterView.as_view(), name="api-register"),
     path("login/", LoginView.as_view(), name="api-login"),
     path("logout/", LogoutView.as_view(), name="api-logout"),
+    path("start-session/", StartSessionView.as_view(), name="start-session"),
     path("finish-session/", FinishSessionView.as_view(), name="finish-session"),
     path("activity-history/", ActivityHistoryView.as_view(), name="activity-history"),
     path("player-stats/", PlayerStatsView.as_view(), name="player-stats"),
     path("card-storage/", CardStorageView.as_view(), name="card-storage"),
+    path("equipped-cards/", EquippedCardsView.as_view(), name="equipped-cards"),
     path("home/", HomeSummaryView.as_view(), name="home-summary"),
 ]

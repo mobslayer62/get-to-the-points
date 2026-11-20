@@ -1,6 +1,22 @@
 from django.contrib import admin
 
-from .models import Card, UserActivity, UserCard, WalkingSession
+from .models import (
+    Card, EquippedCard, SessionStart, UserActivity, UserCard, WalkingSession,
+)
+
+
+@admin.register(SessionStart)
+class SessionStartAdmin(admin.ModelAdmin):
+    list_display = ["user", "session_id", "started_at"]
+    list_filter = ["user"]
+    readonly_fields = ["session_id", "started_at"]
+
+
+@admin.register(EquippedCard)
+class EquippedCardAdmin(admin.ModelAdmin):
+    list_display = ["user", "slot", "card"]
+    list_filter = ["user"]
+    search_fields = ["user__username", "card__name"]
 
 
 @admin.register(UserActivity)
@@ -13,7 +29,7 @@ class UserActivityAdmin(admin.ModelAdmin):
 class WalkingSessionAdmin(admin.ModelAdmin):
     list_display = (
         "user", "distance", "steps", "duration_seconds",
-        "points_earned", "created_at",
+        "points_earned", "bonus_points", "created_at",
     )
     list_filter = ("user",)
     readonly_fields = ("session_id", "created_at")
@@ -21,9 +37,13 @@ class WalkingSessionAdmin(admin.ModelAdmin):
 
 @admin.register(Card)
 class CardAdmin(admin.ModelAdmin):
-    list_display = ["name", "rarity"]
-    list_filter = ["rarity"]
+    list_display = ["name", "rarity", "effect_type", "effect_value"]
+    list_filter = ["rarity", "effect_type"]
     search_fields = ["name"]
+    fieldsets = [
+        (None, {"fields": ["name", "description", "rarity", "image_url"]}),
+        ("Benefit when equipped", {"fields": ["effect_type", "effect_value"]}),
+    ]
 
 
 @admin.register(UserCard)

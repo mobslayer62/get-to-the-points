@@ -22,6 +22,43 @@ def convert_distance_to_points(distance, multiplier=1):
     return int(points.to_integral_value(rounding=ROUND_FLOOR))
 
 
+def calculate_card_bonuses(base_points, cards):
+    """
+    Work out the bonus points each equipped card adds to a run.
+
+    - points_percent: floor(base_points * value / 100), per card
+    - flat_points:    + value
+    Percent bonuses are all based on the run's base points (they don't
+    compound), so the order cards are equipped in doesn't matter.
+
+    Returns (total_bonus, [{"card_id", "name", "effect_type",
+    "effect_value", "bonus"}, ...]) with one entry per card.
+    """
+    from .models import Card
+
+    breakdown = []
+    for card in cards:
+        if card.effect_type == Card.EFFECT_POINTS_PERCENT:
+            bonus = int(
+                (Decimal(base_points) * Decimal(card.effect_value) / Decimal(100))
+                .to_integral_value(rounding=ROUND_FLOOR)
+            )
+        elif card.effect_type == Card.EFFECT_FLAT_POINTS:
+            bonus = card.effect_value
+        else:
+            bonus = 0
+
+        breakdown.append({
+            "card_id": card.id,
+            "name": card.name,
+            "effect_type": card.effect_type,
+            "effect_value": card.effect_value,
+            "bonus": bonus,
+        })
+
+    return sum(b["bonus"] for b in breakdown), breakdown
+
+
 def find_session_problem(distance, duration_seconds):
     """
     Return a human-readable reason if the session looks impossible,
@@ -75,6 +112,51 @@ def add_card_to_storage(user, card):
             user_card.refresh_from_db()
 
     return user_card, created
+
+
+# ----- Card loadout -----
+
+def remove_unowned_equipped_cards(user):
+    """
+    Unequip any card the player no longer owns, then close the gaps so the
+    remaining cards sit in slots 1, 2, 3... in their original order.
+
+    Returns the number of cards removed.
+    """
+    from django.db import transaction
+
+    from .models import EquippedCard, UserCard
+
+    with transaction.atomic():
+        owned = UserCard.objects.filter(
+            user=user, quantity__gte=1
+        ).values_list("card_id", flat=True)
+
+        removed, _ = (
+            EquippedCard.objects
+            .filter(user=user)
+            .exclude(card_id__in=owned)
+            .delete()
+        )
+        if removed:
+            compact_equipped_slots(user)
+
+    return removed
+
+
+def compact_equipped_slots(user):
+    """
+    Renumber a player's equipped cards to 1..n with no gaps.
+    Moving each card down in ascending order never collides with the
+    one-card-per-slot rule, because the target slot is always free.
+    """
+    from .models import EquippedCard
+
+    equipped = EquippedCard.objects.filter(user=user).order_by("slot")
+    for new_slot, item in enumerate(equipped, start=1):
+        if item.slot != new_slot:
+            item.slot = new_slot
+            item.save(update_fields=["slot"])
 
 
 # ----- Main menu -----
