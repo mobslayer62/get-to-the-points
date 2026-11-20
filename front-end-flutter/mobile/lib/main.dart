@@ -1,6 +1,7 @@
 
 import 'dart:async';
 import 'api_service.dart';
+import 'equip_cards_page.dart';
 import 'login_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -84,10 +85,34 @@ class _LocationPageState extends State<LocationPage> {
   String? submitError;
   Map<String, dynamic>? lastResult;
 
+  // Cards equipped for this run (locked in by the server when it starts).
+  List<dynamic>? equippedCards;
+
+  // Id sent to start-session; reused when the run is saved.
+  String? activeSessionId;
+
   @override
   void initState() {
     super.initState();
     loadStats();
+    loadEquippedCards();
+  }
+
+  Future<void> loadEquippedCards() async {
+    try {
+      final loadout = await ApiService.getEquippedCards();
+      if (!mounted) return;
+      setState(() => equippedCards = loadout['cards'] as List<dynamic>);
+    } on ApiException {
+      // Not critical for running; leave the loadout unknown.
+    }
+  }
+
+  Future<void> openEquipCards() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const EquipCardsPage()),
+    );
+    if (mounted) loadEquippedCards();
   }
 
   Future<void> loadStats() async {
@@ -262,6 +287,23 @@ class _LocationPageState extends State<LocationPage> {
           permission == LocationPermission.deniedForever) {
         throw Exception('Location permission denied.');
       }
+
+      // Tell the server the run is starting. This locks in the equipped
+      // cards; the same id is used when the run is saved.
+      if (mounted) {
+        setState(() => statusMessage = 'Locking in your cards...');
+      }
+      final sessionId = const Uuid().v4();
+      try {
+        await ApiService.startSession(sessionId);
+      } on ApiException catch (e) {
+        if (e.statusCode == 401) {
+          goToLogin();
+          return;
+        }
+        throw Exception('Could not start the run: ${e.message}');
+      }
+      activeSessionId = sessionId;
 
       // Start step counter
       bool stepAvailable = false;
@@ -520,13 +562,51 @@ class _LocationPageState extends State<LocationPage> {
 
     if (!submit) return;
 
-    // Keep the run (and a fixed session id) until the server accepts it.
-    pendingSessionId = const Uuid().v4();
+    // Keep the run (and its session id from start) until the server accepts it.
+    final sessionId = activeSessionId;
+    activeSessionId = null;
+    if (sessionId == null) return;
+    pendingSessionId = sessionId;
     pendingDistance = totalDistance;
     pendingSteps = totalSteps;
     pendingDuration = duration;
 
     await submitRun();
+  }
+
+  /// Rows under the reward: distance points, one line per equipped card,
+  /// and the bonus total. Empty when no cards were equipped.
+  List<Widget> _bonusBreakdown(Map<String, dynamic> result) {
+    final cards = (result['card_bonuses'] as List<dynamic>? ?? [])
+        .cast<Map<String, dynamic>>();
+    if (cards.isEmpty) return [];
+
+    Widget row(String label, String value, {bool bold = false}) {
+      final style = TextStyle(
+        fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+      );
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Expanded(child: Text(label, style: style)),
+            Text(value, style: style),
+          ],
+        ),
+      );
+    }
+
+    return [
+      const Divider(height: 20),
+      row('Distance', '${result['base_points']}'),
+      for (final c in cards)
+        row(
+          [c['name'], effectLabel(c)].whereType<String>().join(' · '),
+          '+${c['bonus']}',
+        ),
+      const Divider(height: 12),
+      row('Card bonus', '+${result['bonus_points']}', bold: true),
+    ];
   }
 
   // Distance in kilometers
@@ -593,6 +673,33 @@ class _LocationPageState extends State<LocationPage> {
                   label: Text(
                     totalPoints == null ? 'Points: ...' : 'Points: $totalPoints',
                     style: const TextStyle(fontSize: 18),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                // Equipped cards (can only change between runs)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.backpack_outlined),
+                    title: Text(
+                      equippedCards == null
+                          ? 'Equipped cards: ...'
+                          : 'Equipped cards (${equippedCards!.length}/4)',
+                    ),
+                    subtitle: equippedCards == null || equippedCards!.isEmpty
+                        ? const Text('None equipped')
+                        : Text(
+                            equippedCards!.map((c) => c['name']).join(', '),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                    trailing: TextButton(
+                      onPressed: isTracking || isSubmitting || pendingSessionId != null
+                          ? null
+                          : openEquipCards,
+                      child: const Text('Change'),
+                    ),
                   ),
                 ),
 
@@ -707,6 +814,7 @@ class _LocationPageState extends State<LocationPage> {
                             ),
                           ),
                           Text('for ${lastResult!['session_distance']} m'),
+                          ..._bonusBreakdown(lastResult!),
                           if (lastResult!['already_processed'] == true)
                             const Text('(this run was already saved)'),
                         ],

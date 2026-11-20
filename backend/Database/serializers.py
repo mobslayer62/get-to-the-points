@@ -5,7 +5,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .models import UserActivity, UserCard, WalkingSession
+from .models import EquippedCard, UserActivity, UserCard, WalkingSession
 from .utils import find_session_problem
 
 
@@ -76,8 +76,18 @@ class FinishSessionSerializer(serializers.Serializer):
         return data
 
 
+class StartSessionSerializer(serializers.Serializer):
+    """The app picks the session id when the run starts and reuses it at finish."""
+
+    session_id = serializers.UUIDField()
+
+
 # Individual walking session history
 class WalkingSessionSerializer(serializers.ModelSerializer):
+    equipped_card_ids = serializers.PrimaryKeyRelatedField(
+        source="equipped_cards", many=True, read_only=True
+    )
+
     class Meta:
         model = WalkingSession
         fields = [
@@ -86,6 +96,8 @@ class WalkingSessionSerializer(serializers.ModelSerializer):
             "steps",
             "duration_seconds",
             "points_earned",
+            "bonus_points",
+            "equipped_card_ids",
             "created_at",
         ]
         read_only_fields = fields
@@ -108,6 +120,8 @@ class UserCardSerializer(serializers.ModelSerializer):
     description = serializers.CharField(source="card.description", read_only=True)
     rarity = serializers.CharField(source="card.rarity", read_only=True)
     image_url = serializers.CharField(source="card.image_url", read_only=True)
+    effect_type = serializers.CharField(source="card.effect_type", read_only=True)
+    effect_value = serializers.IntegerField(source="card.effect_value", read_only=True)
 
     class Meta:
         model = UserCard
@@ -117,6 +131,60 @@ class UserCardSerializer(serializers.ModelSerializer):
             "description",
             "rarity",
             "image_url",
+            "effect_type",
+            "effect_value",
             "quantity",
             "first_obtained_at",
         ]
+
+
+# ----- Card loadout -----
+
+class EquippedCardSerializer(serializers.ModelSerializer):
+    card_id = serializers.IntegerField(source="card.id", read_only=True)
+    name = serializers.CharField(source="card.name", read_only=True)
+    description = serializers.CharField(source="card.description", read_only=True)
+    rarity = serializers.CharField(source="card.rarity", read_only=True)
+    image_url = serializers.CharField(source="card.image_url", read_only=True)
+    effect_type = serializers.CharField(source="card.effect_type", read_only=True)
+    effect_value = serializers.IntegerField(source="card.effect_value", read_only=True)
+
+    class Meta:
+        model = EquippedCard
+        fields = [
+            "slot", "card_id", "name", "description", "rarity", "image_url",
+            "effect_type", "effect_value",
+        ]
+
+
+class SetEquippedCardsSerializer(serializers.Serializer):
+    """
+    PUT {"card_ids": [3, 7, 1]} replaces the whole loadout.
+    Order = slot order. 0..4 cards, no duplicates, must be owned.
+    """
+
+    card_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=True,
+        max_length=EquippedCard.MAX_SLOTS,
+        error_messages={
+            "max_length": f"You can equip at most {EquippedCard.MAX_SLOTS} cards.",
+        },
+    )
+
+    def validate_card_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("You can't equip the same card twice.")
+
+        user = self.context["request"].user
+        owned = set(
+            UserCard.objects
+            .filter(user=user, card_id__in=value)
+            .values_list("card_id", flat=True)
+        )
+        missing = [cid for cid in value if cid not in owned]
+        if missing:
+            raise serializers.ValidationError(
+                f"You don't own card(s): {', '.join(map(str, missing))}."
+            )
+        return value

@@ -73,8 +73,19 @@ class ApiService {
 
   // ----- Activity -----
 
-  /// [sessionId] must stay the same if you retry, so points are never
-  /// awarded twice.
+  /// Call when the player taps Start. Locks in the equipped cards for this
+  /// run; finishSession only accepts a [sessionId] that was started here.
+  /// Safe to retry with the same id.
+  static Future<Map<String, dynamic>> startSession(String sessionId) {
+    return _send(() => http.post(
+          Uri.parse('$baseUrl/start-session/'),
+          headers: _headers,
+          body: jsonEncode({'session_id': sessionId}),
+        ));
+  }
+
+  /// [sessionId] must be the id passed to [startSession] and must stay the
+  /// same if you retry, so points are never awarded twice.
   static Future<Map<String, dynamic>> finishSession({
     required String sessionId,
     required double distanceMeters,
@@ -119,6 +130,24 @@ class ApiService {
     return _send(() => http.get(
           Uri.parse('$baseUrl/card-storage/'),
           headers: _headers,
+        ));
+  }
+
+  /// The player's loadout: {max_slots, cards: [{slot, card_id, name, ...}]}.
+  static Future<Map<String, dynamic>> getEquippedCards() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/equipped-cards/'),
+          headers: _headers,
+        ));
+  }
+
+  /// Replaces the loadout. List order = slot order. The server rejects
+  /// more than 4 cards, duplicates, and cards the player doesn't own.
+  static Future<Map<String, dynamic>> setEquippedCards(List<int> cardIds) {
+    return _send(() => http.put(
+          Uri.parse('$baseUrl/equipped-cards/'),
+          headers: _headers,
+          body: jsonEncode({'card_ids': cardIds}),
         ));
   }
 

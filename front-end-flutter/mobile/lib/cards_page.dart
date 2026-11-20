@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'equip_cards_page.dart';
 import 'login_page.dart';
 
 /// The player's card collection from GET /api/card-storage/.
@@ -39,17 +40,6 @@ class _CardsPageState extends State<CardsPage> {
     }
   }
 
-  Color _rarityColor(String rarity) {
-    switch (rarity) {
-      case 'S':
-        return Colors.amber.shade700;
-      case 'A+':
-        return Colors.purple;
-      default:
-        return Colors.blueGrey;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final storage = _storage;
@@ -77,7 +67,7 @@ class _CardsPageState extends State<CardsPage> {
         itemBuilder: (context, i) {
           final c = cards[i] as Map<String, dynamic>;
           final rarity = c['rarity'] as String? ?? 'A';
-          final color = _rarityColor(rarity);
+          final color = rarityColor(rarity);
           return Card(
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
@@ -119,6 +109,15 @@ class _CardsPageState extends State<CardsPage> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                  if (effectLabel(c) != null)
+                    Text(
+                      effectLabel(c)!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.green.shade700,
+                      ),
+                    ),
                   Text(
                     c['description'] as String? ?? '',
                     maxLines: 2,
@@ -138,6 +137,15 @@ class _CardsPageState extends State<CardsPage> {
         title: Text(storage == null
             ? 'Cards'
             : 'Cards (${storage['unique_cards']} unique)'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const EquipCardsPage()),
+            ),
+            icon: const Icon(Icons.backpack_outlined),
+            label: const Text('Equip'),
+          ),
+        ],
       ),
       body: body,
     );
