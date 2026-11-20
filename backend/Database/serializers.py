@@ -122,6 +122,11 @@ class UserCardSerializer(serializers.ModelSerializer):
     image_url = serializers.CharField(source="card.image_url", read_only=True)
     effect_type = serializers.CharField(source="card.effect_type", read_only=True)
     effect_value = serializers.IntegerField(source="card.effect_value", read_only=True)
+    special_type = serializers.CharField(source="card.special_type", read_only=True)
+    special_value = serializers.IntegerField(source="card.special_value", read_only=True)
+    special_threshold = serializers.IntegerField(
+        source="card.special_threshold", read_only=True
+    )
 
     class Meta:
         model = UserCard
@@ -133,6 +138,9 @@ class UserCardSerializer(serializers.ModelSerializer):
             "image_url",
             "effect_type",
             "effect_value",
+            "special_type",
+            "special_value",
+            "special_threshold",
             "quantity",
             "first_obtained_at",
         ]
@@ -148,12 +156,18 @@ class EquippedCardSerializer(serializers.ModelSerializer):
     image_url = serializers.CharField(source="card.image_url", read_only=True)
     effect_type = serializers.CharField(source="card.effect_type", read_only=True)
     effect_value = serializers.IntegerField(source="card.effect_value", read_only=True)
+    special_type = serializers.CharField(source="card.special_type", read_only=True)
+    special_value = serializers.IntegerField(source="card.special_value", read_only=True)
+    special_threshold = serializers.IntegerField(
+        source="card.special_threshold", read_only=True
+    )
 
     class Meta:
         model = EquippedCard
         fields = [
             "slot", "card_id", "name", "description", "rarity", "image_url",
             "effect_type", "effect_value",
+            "special_type", "special_value", "special_threshold",
         ]
 
 

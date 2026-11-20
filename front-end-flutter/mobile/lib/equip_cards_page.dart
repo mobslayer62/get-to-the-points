@@ -233,7 +233,13 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
                         : Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.style, color: color),
+                              Expanded(
+                                child: CardArt(
+                                  card: card,
+                                  color: color,
+                                  iconSize: 24,
+                                ),
+                              ),
                               const SizedBox(height: 4),
                               Text(
                                 card['name'] as String? ?? '',
@@ -299,9 +305,12 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
                           ),
                         ),
                       ),
-                      const Spacer(),
-                      Icon(Icons.style, size: 36, color: color),
-                      const Spacer(),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: CardArt(card: c, color: color),
+                        ),
+                      ),
                       Text(
                         c['name'] as String? ?? '',
                         maxLines: 2,
@@ -341,17 +350,109 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
   }
 }
 
-/// Short text for a card's benefit, e.g. "+25% points" or "+5 points".
-/// Returns null for cards with no effect.
+/// Short text for a card's benefits (passive and special), e.g.
+/// "+15% points · +50 every 5 km total". Returns null for cards with no effect.
 String? effectLabel(Map<String, dynamic> card) {
+  final parts = [_passiveLabel(card), _specialLabel(card)].whereType<String>();
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
+String? _passiveLabel(Map<String, dynamic> card) {
   final value = card['effect_value'] as int? ?? 0;
   switch (card['effect_type']) {
     case 'points_percent':
       return '+$value% points';
+    case 'walk_points_percent':
+      return '+$value% points on walks';
+    case 'run_points_percent':
+      return '+$value% points on runs';
     case 'flat_points':
       return '+$value points per run';
     default:
       return null;
+  }
+}
+
+String? _specialLabel(Map<String, dynamic> card) {
+  final value = card['special_value'] as int? ?? 0;
+  final threshold = card['special_threshold'] as int? ?? 0;
+  if (threshold <= 0) return null;
+  switch (card['special_type']) {
+    case 'distance_milestone':
+      return '+$value every ${_distanceText(threshold)} total';
+    case 'walk_distance':
+      return '+$value per ${_distanceText(threshold)} walked';
+    case 'run_distance':
+      return '+$value per ${_distanceText(threshold)} run';
+    case 'min_duration':
+      return '+$value for runs of $threshold+ min';
+    default:
+      return null;
+  }
+}
+
+String _distanceText(int meters) {
+  if (meters % 1000 == 0) return '${meters ~/ 1000} km';
+  return '$meters m';
+}
+
+/// Turns a Google Drive share link into a link to the image itself.
+/// Drive links like .../file/d/<id>/view or ...?id=<id> open Google's
+/// preview page, which can't be drawn as an image. Other links pass through.
+String cardImageUrl(Object? raw) {
+  final url = (raw as String? ?? '').trim();
+  if (url.isEmpty) return '';
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host != 'drive.google.com') return url;
+
+  String? id = uri.queryParameters['id'];
+  final segments = uri.pathSegments;
+  final d = segments.indexOf('d');
+  if (d != -1 && d + 1 < segments.length) id = segments[d + 1];
+
+  return id == null ? url : 'https://lh3.googleusercontent.com/d/$id';
+}
+
+/// A card's art from its image_url, or the plain card icon when it has
+/// none or the image fails to load.
+class CardArt extends StatelessWidget {
+  const CardArt({
+    super.key,
+    required this.card,
+    required this.color,
+    this.iconSize = 36,
+  });
+
+  final Map<String, dynamic> card;
+  final Color color;
+  final double iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Center(child: Icon(Icons.style, size: iconSize, color: color));
+    final url = cardImageUrl(card['image_url']);
+    if (url.isEmpty) return icon;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.network(
+        url,
+        fit: BoxFit.contain,
+        // On web, hosts that block cross-site loading (e.g. Google Drive)
+        // are shown with a plain <img> element instead.
+        webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
+        loadingBuilder: (context, child, progress) => progress == null
+            ? child
+            : const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+        errorBuilder: (context, error, stack) => icon,
+      ),
+    );
   }
 }
 

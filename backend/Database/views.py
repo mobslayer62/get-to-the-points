@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth.models import Group, User
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
@@ -199,8 +200,18 @@ class FinishSessionView(APIView):
                     )
 
                 # Use the cards locked in at the start, not the current loadout.
-                cards = list(start.equipped_cards.all())
-                bonus_points, _ = calculate_card_bonuses(base_points, cards)
+                cards = list(start.equipped_cards.order_by("id"))
+
+                # Duration-based specials can't be unlocked by a run that
+                # claims to be longer than the time since it was started.
+                elapsed = int((timezone.now() - start.started_at).total_seconds())
+                bonus_points, card_bonuses = calculate_card_bonuses(
+                    base_points,
+                    cards,
+                    distance=distance,
+                    duration_seconds=min(data["duration_seconds"], max(elapsed, 0)),
+                    previous_total_distance=activity.total_distance,
+                )
 
                 session = WalkingSession.objects.create(
                     session_id=data["session_id"],
@@ -210,6 +221,7 @@ class FinishSessionView(APIView):
                     duration_seconds=data["duration_seconds"],
                     points_earned=base_points + bonus_points,
                     bonus_points=bonus_points,
+                    card_bonus_breakdown=card_bonuses,
                 )
                 created = True
 
@@ -221,18 +233,13 @@ class FinishSessionView(APIView):
                 activity.total_points += session.points_earned
                 activity.save()
 
-        # Per-card breakdown for the result screen (recomputed on retries).
-        saved_base = session.points_earned - session.bonus_points
-        _, card_bonuses = calculate_card_bonuses(
-            saved_base, session.equipped_cards.order_by("id")
-        )
-
         return Response({
             "already_processed": not created,
             "session_distance": str(session.distance),
-            "base_points": saved_base,
+            "base_points": session.points_earned - session.bonus_points,
             "bonus_points": session.bonus_points,
-            "card_bonuses": card_bonuses,
+            # Saved with the run, so retries show exactly what was awarded.
+            "card_bonuses": session.card_bonus_breakdown,
             "points_earned": session.points_earned,
             "equipped_card_ids": list(
                 session.equipped_cards.order_by("id").values_list("id", flat=True)

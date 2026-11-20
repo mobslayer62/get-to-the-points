@@ -1,8 +1,10 @@
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
@@ -12,6 +14,7 @@ from .utils import (
     calculate_card_bonuses,
     convert_distance_to_points,
     find_session_problem,
+    is_walk,
 )
 
 STRONG_PASSWORD = "runFast!2026"
@@ -576,3 +579,146 @@ class EquippedOwnershipTests(TestCase):
         EquippedCard.objects.create(user=other, card=self.cards[0], slot=1)
         UserCard.objects.get(user=self.user, card=self.cards[0]).delete()
         self.assertTrue(EquippedCard.objects.filter(user=other).exists())
+
+
+class SupportCardEffectTests(TestCase):
+    """The five Week 8 shortlist cards, built from passive + special effects."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("support", password=STRONG_PASSWORD)
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+        def make(name, effect_type, effect_value, special_type, value, threshold):
+            card = Card.objects.create(
+                name=name,
+                effect_type=effect_type, effect_value=effect_value,
+                special_type=special_type, special_value=value,
+                special_threshold=threshold,
+            )
+            add_card_to_storage(self.user, card)
+            return card
+
+        # Passive +15%, +50 every 5 km accumulated
+        self.general = make("General", "points_percent", 15,
+                            "distance_milestone", 50, 5000)
+        # Passive +5%, +10 for a session of 20+ min
+        self.physics = make("Physics", "points_percent", 5,
+                            "min_duration", 10, 20)
+        # Passive +25% on walks, +10 per km walked
+        self.delta = make("Delta", "walk_points_percent", 25,
+                          "walk_distance", 10, 1000)
+        # Passive +5%, +50 for a session of 40+ min
+        self.education = make("Education", "points_percent", 5,
+                              "min_duration", 50, 40)
+
+    def bonus(self, card, base, **kw):
+        _, [entry] = calculate_card_bonuses(base, [card], **kw)
+        return entry["passive_bonus"], entry["special_bonus"]
+
+    def test_walk_or_run_by_average_speed(self):
+        self.assertTrue(is_walk(3000, 30 * 60))   # 1.67 m/s
+        self.assertFalse(is_walk(3000, 15 * 60))  # 3.33 m/s
+        self.assertTrue(is_walk(150, 0))          # untimed short run
+
+    def test_distance_milestone_counts_lifetime_distance(self):
+        # 4.5 km before, +1 km now -> passes 5 km once
+        self.assertEqual(self.bonus(self.general, 100, distance=1000,
+                                    previous_total_distance=4500), (15, 50))
+        # 5.5 km before, +1 km now -> no new milestone
+        self.assertEqual(self.bonus(self.general, 100, distance=1000,
+                                    previous_total_distance=5500), (15, 0))
+        # 0 -> 11 km in one go passes 5 km and 10 km
+        self.assertEqual(self.bonus(self.general, 1100, distance=11000), (165, 100))
+
+    def test_min_duration(self):
+        self.assertEqual(self.bonus(self.physics, 100, duration_seconds=20 * 60), (5, 10))
+        self.assertEqual(self.bonus(self.physics, 100, duration_seconds=20 * 60 - 1), (5, 0))
+        self.assertEqual(self.bonus(self.education, 100, duration_seconds=40 * 60), (5, 50))
+        self.assertEqual(self.bonus(self.education, 100, duration_seconds=39 * 60), (5, 0))
+
+    def test_walk_only_card(self):
+        # 2.5 km walk in 30 min: +25% of 250 = 62, 2 full km = +20
+        self.assertEqual(self.bonus(self.delta, 250, distance=2500,
+                                    duration_seconds=30 * 60), (62, 20))
+        # same distance as a run in 10 min: nothing
+        self.assertEqual(self.bonus(self.delta, 250, distance=2500,
+                                    duration_seconds=10 * 60), (0, 0))
+
+    def test_run_only_cards(self):
+        steady = Card.objects.create(
+            name="Steady runner",
+            effect_type="run_points_percent", effect_value=15,
+            special_type="run_distance", special_value=5, special_threshold=1000,
+        )
+        long_run = Card.objects.create(
+            name="Distance runner",
+            effect_type="run_points_percent", effect_value=10,
+            special_type="run_distance", special_value=40, special_threshold=5000,
+        )
+        # 5 km run in 30 min (2.78 m/s): base 500
+        run = {"distance": 5000, "duration_seconds": 30 * 60}
+        self.assertEqual(self.bonus(steady, 500, **run), (75, 25))
+        self.assertEqual(self.bonus(long_run, 500, **run), (50, 40))
+        # 3 km run: no full 5 km yet
+        self.assertEqual(self.bonus(long_run, 300, distance=3000,
+                                    duration_seconds=18 * 60), (30, 0))
+        # Same 5 km as a walk (60 min): nothing
+        walk = {"distance": 5000, "duration_seconds": 60 * 60}
+        self.assertEqual(self.bonus(steady, 500, **walk), (0, 0))
+        self.assertEqual(self.bonus(long_run, 500, **walk), (0, 0))
+
+    def finish_run(self, cards, distance, duration_seconds, started_seconds_ago):
+        self.client.put("/api/equipped-cards/",
+                        {"card_ids": [c.id for c in cards]}, format="json")
+        sid = str(uuid.uuid4())
+        start_run(self.client, sid)
+        SessionStart.objects.filter(session_id=sid).update(
+            started_at=timezone.now() - timedelta(seconds=started_seconds_ago)
+        )
+        return self.client.post("/api/finish-session/", {
+            "session_id": sid, "distance": distance,
+            "duration_seconds": duration_seconds,
+        }, format="json")
+
+    def test_full_run_through_api(self):
+        # 3 km walk in 45 min: base 300
+        res = self.finish_run([self.general, self.physics, self.delta, self.education],
+                       "3000", 45 * 60, 46 * 60)
+        self.assertEqual(res.status_code, 200)
+        by_name = {c["name"]: c["bonus"] for c in res.data["card_bonuses"]}
+        self.assertEqual(by_name, {
+            "General": 45,         # 15%, no 5 km milestone yet
+            "Physics": 15 + 10,
+            "Delta": 75 + 30,
+            "Education": 15 + 50,
+        })
+        self.assertEqual(res.data["points_earned"], 300 + 45 + 25 + 105 + 65)
+
+    def test_milestone_triggers_on_later_run(self):
+        self.finish_run([self.general], "3000", 30 * 60, 31 * 60)
+        res = self.finish_run([self.general], "3000", 30 * 60, 31 * 60)  # 6 km total
+        self.assertEqual(res.data["card_bonuses"][0]["special_bonus"], 50)
+
+    def test_claimed_duration_capped_by_real_time(self):
+        # Claims 40 min, but the run was started only 5 min ago.
+        res = self.finish_run([self.education], "500", 40 * 60, 5 * 60)
+        self.assertEqual(res.data["card_bonuses"][0]["special_bonus"], 0)
+
+    def test_retry_returns_saved_breakdown(self):
+        self.client.put("/api/equipped-cards/",
+                        {"card_ids": [self.general.id]}, format="json")
+        sid = str(uuid.uuid4())
+        start_run(self.client, sid)
+        payload = {"session_id": sid, "distance": "6000", "duration_seconds": 3600}
+        first = self.client.post("/api/finish-session/", payload, format="json")
+        again = self.client.post("/api/finish-session/", payload, format="json")
+        self.assertEqual(first.data["card_bonuses"][0]["special_bonus"], 50)
+        self.assertEqual(again.data["card_bonuses"], first.data["card_bonuses"])
+
+    def test_card_storage_shows_special(self):
+        res = self.client.get("/api/card-storage/")
+        card = next(c for c in res.data["cards"] if c["name"] == "General")
+        self.assertEqual(card["special_type"], "distance_milestone")
+        self.assertEqual(card["special_value"], 50)
+        self.assertEqual(card["special_threshold"], 5000)
