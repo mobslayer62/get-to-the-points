@@ -5,9 +5,11 @@ import 'activity_history_page.dart';
 import 'api_service.dart';
 import 'cards_page.dart';
 import 'coming_soon_page.dart';
+import 'level_page.dart';
 import 'login_page.dart';
 import 'main.dart';
 import 'profile_page.dart';
+import 'story_list_page.dart';
 
 /// Main menu. All numbers shown here come from GET /api/home/.
 class MainMenuPage extends StatefulWidget {
@@ -90,6 +92,14 @@ class _MainMenuPageState extends State<MainMenuPage> {
     return 'Last run: ${(meters / 1000).toStringAsFixed(2)} km';
   }
 
+  String get _storySubtitle {
+    final story = _home?['story'] as Map<String, dynamic>?;
+    if (story == null) return '...';
+    final next = story['next_to_read'] as String?;
+    if (next != null) return next;
+    return '${story['unlocked']} / ${story['total']} unlocked';
+  }
+
   String get _cardsSubtitle {
     final cards = _home?['cards'] as Map<String, dynamic>?;
     if (cards == null) return '...';
@@ -101,6 +111,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
     final colors = Theme.of(context).colorScheme;
     final username = _home?['username'] as String? ?? ApiService.username ?? '';
     final points = _home?['total_points'];
+    final level = (_home?['level'] as Map<String, dynamic>?)?['level'];
 
     return Scaffold(
       body: SafeArea(
@@ -129,6 +140,23 @@ class _MainMenuPageState extends State<MainMenuPage> {
                         ),
                         if (username.isNotEmpty)
                           Text('Welcome back, $username'),
+                        if (level != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            // Tap to open the Level tab
+                            child: ActionChip(
+                              visualDensity: VisualDensity.compact,
+                              avatar: const Icon(Icons.trending_up, size: 18),
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('Level $level'),
+                                  const Icon(Icons.chevron_right, size: 18),
+                                ],
+                              ),
+                              onPressed: () => _open(const LevelPage()),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -231,8 +259,8 @@ class _MainMenuPageState extends State<MainMenuPage> {
                   _MenuTile(
                     icon: Icons.menu_book,
                     title: 'Story',
-                    subtitle: 'Coming soon',
-                    onTap: () => _comingSoon('Story', Icons.menu_book),
+                    subtitle: _storySubtitle,
+                    onTap: () => _open(const StoryListPage()),
                   ),
                   _MenuTile(
                     icon: Icons.style,

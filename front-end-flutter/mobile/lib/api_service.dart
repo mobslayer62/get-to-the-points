@@ -133,6 +133,44 @@ class ApiService {
         ));
   }
 
+  // ----- Levels and story -----
+
+  /// Level summary + every level's cost and rewards (Level tab).
+  static Future<Map<String, dynamic>> getLevel() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/level/'),
+          headers: _headers,
+        ));
+  }
+
+  static Future<Map<String, dynamic>> levelUp() {
+    return _send(() => http.post(
+          Uri.parse('$baseUrl/level/up/'),
+          headers: _headers,
+        ));
+  }
+
+  static Future<Map<String, dynamic>> getStory() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/story/'),
+          headers: _headers,
+        ));
+  }
+
+  static Future<Map<String, dynamic>> getChapter(String chapterId) {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/story/$chapterId/'),
+          headers: _headers,
+        ));
+  }
+
+  static Future<Map<String, dynamic>> completeChapter(String chapterId) {
+    return _send(() => http.post(
+          Uri.parse('$baseUrl/story/$chapterId/complete/'),
+          headers: _headers,
+        ));
+  }
+
   /// The player's loadout: {max_slots, cards: [{slot, card_id, name, ...}]}.
   static Future<Map<String, dynamic>> getEquippedCards() {
     return _send(() => http.get(
