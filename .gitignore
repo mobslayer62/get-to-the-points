@@ -20,3 +20,5 @@ media/
 .idea/
 Thumbs.db
 desktop.ini
+# ----- Server database backups (backend/deploy/update.sh) -----
+backups/
