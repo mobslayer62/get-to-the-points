@@ -133,6 +133,43 @@ class ApiService {
         ));
   }
 
+  // ----- Tutorial -----
+
+  /// The tutorial steps, filled in for this player.
+  static Future<Map<String, dynamic>> getTutorial() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/tutorial/'),
+          headers: _headers,
+        ));
+  }
+
+  /// One-time bonus at the tutorial's run step. Returns {awarded, total_points}.
+  static Future<Map<String, dynamic>> claimTutorialRunBonus() {
+    return _send(() => http.post(
+          Uri.parse('$baseUrl/tutorial/run-bonus/'),
+          headers: _headers,
+        ));
+  }
+
+  // ----- Capture (gacha) -----
+
+  /// Costs, rates, pity counter and card pool.
+  static Future<Map<String, dynamic>> getGacha() {
+    return _send(() => http.get(
+          Uri.parse('$baseUrl/gacha/'),
+          headers: _headers,
+        ));
+  }
+
+  /// Pull [count] cards (1 or 10). The server rolls and spends the points.
+  static Future<Map<String, dynamic>> pullGacha(int count) {
+    return _send(() => http.post(
+          Uri.parse('$baseUrl/gacha/pull/'),
+          headers: _headers,
+          body: jsonEncode({'count': count}),
+        ));
+  }
+
   // ----- Levels and story -----
 
   /// Level summary + every level's cost and rewards (Level tab).

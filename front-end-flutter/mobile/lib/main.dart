@@ -3,6 +3,7 @@ import 'dart:async';
 import 'api_service.dart';
 import 'equip_cards_page.dart';
 import 'login_page.dart';
+import 'tutorial.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
@@ -21,10 +22,17 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Running Game',
+      title: 'Get to the Points',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
+      ),
+      // The tutorial draws on top of every screen
+      builder: (context, child) => Stack(
+        children: [
+          if (child != null) child,
+          const TutorialOverlay(),
+        ],
       ),
       home: const LoginPage(),
     );
@@ -91,18 +99,70 @@ class _LocationPageState extends State<LocationPage> {
   // Id sent to start-session; reused when the run is saved.
   String? activeSessionId;
 
+  int maxCardSlots = 4;
+
+  // ----- Tutorial -----
+  final TutorialController tutorial = TutorialController.instance;
+  late int seenBonusToken;
+
   @override
   void initState() {
     super.initState();
     loadStats();
     loadEquippedCards();
+    seenBonusToken = tutorial.runBonusToken;
+    tutorial.addListener(onTutorialChanged);
+    tutorial.report('open_run');
+  }
+
+  /// Shows the tutorial's one-time run bonus in the reward card.
+  void onTutorialChanged() {
+    if (!mounted || tutorial.runBonusToken == seenBonusToken) return;
+    seenBonusToken = tutorial.runBonusToken;
+    final bonus = tutorial.runBonus;
+    if (bonus == null) return;
+    setState(() {
+      final awarded = bonus['awarded'] as int? ?? 0;
+      if (bonus['skipped'] == true || lastResult == null) {
+        lastResult = {
+          'tutorial_only': true,
+          'points_earned': awarded,
+          'tutorial_bonus': awarded,
+          'tutorial_bonus_failed': bonus['failed'] == true,
+        };
+      } else {
+        lastResult = {
+          ...lastResult!,
+          'tutorial_bonus': awarded,
+          'tutorial_bonus_failed': bonus['failed'] == true,
+        };
+      }
+      final total = bonus['total_points'] as int?;
+      if (total != null) totalPoints = total;
+    });
+    scrollToResult();
+  }
+
+  final GlobalKey resultKey = GlobalKey();
+
+  void scrollToResult() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = resultKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 300));
+      }
+    });
   }
 
   Future<void> loadEquippedCards() async {
     try {
       final loadout = await ApiService.getEquippedCards();
       if (!mounted) return;
-      setState(() => equippedCards = loadout['cards'] as List<dynamic>);
+      setState(() {
+        equippedCards = loadout['cards'] as List<dynamic>;
+        maxCardSlots = loadout['max_slots'] as int? ?? 4;
+      });
     } on ApiException {
       // Not critical for running; leave the loadout unknown.
     }
@@ -112,7 +172,9 @@ class _LocationPageState extends State<LocationPage> {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const EquipCardsPage()),
     );
-    if (mounted) loadEquippedCards();
+    if (!mounted) return;
+    await loadEquippedCards();
+    tutorial.report('run_returned');
   }
 
   Future<void> loadStats() async {
@@ -154,6 +216,8 @@ class _LocationPageState extends State<LocationPage> {
         pendingSessionId = null;
         statusMessage = 'Run saved!';
       });
+      scrollToResult();
+      tutorial.report('run_saved');
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -167,6 +231,7 @@ class _LocationPageState extends State<LocationPage> {
         }
         statusMessage = 'Run not saved';
       });
+      tutorial.report('run_failed');
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
@@ -359,6 +424,7 @@ class _LocationPageState extends State<LocationPage> {
       totalSteps = 0;
 
       runStartTime = DateTime.now();
+      tutorial.report('run_started');
 
       setState(() {
         isTracking = true;
@@ -525,6 +591,7 @@ class _LocationPageState extends State<LocationPage> {
           gpsDebugMessage = 'GPS FAILED:\n$e';
         });
       }
+      tutorial.report('run_failed');
     }
   }
 
@@ -565,7 +632,10 @@ class _LocationPageState extends State<LocationPage> {
     // Keep the run (and its session id from start) until the server accepts it.
     final sessionId = activeSessionId;
     activeSessionId = null;
-    if (sessionId == null) return;
+    if (sessionId == null) {
+      tutorial.report('run_failed');
+      return;
+    }
     pendingSessionId = sessionId;
     pendingDistance = totalDistance;
     pendingSteps = totalSteps;
@@ -629,6 +699,7 @@ class _LocationPageState extends State<LocationPage> {
 
   @override
   void dispose() {
+    tutorial.removeListener(onTutorialChanged);
     displayTimer?.cancel();
     gpsWatchdogTimer?.cancel();
     positionStream?.cancel();
@@ -659,7 +730,39 @@ class _LocationPageState extends State<LocationPage> {
         centerTitle: true,
       ),
 
-      body: Center(
+      // Start / Stop stays visible above the phone's navigation bar
+      // (disabled while a finished run is waiting to be saved)
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+          child: TutorialTarget(
+            id: 'run_start_button',
+            child: SizedBox(
+              height: 56,
+              child: FilledButton.icon(
+                onPressed: isSubmitting || (!isTracking && pendingSessionId != null)
+                    ? null
+                    : isTracking
+                        ? stopTracking
+                        : startTracking,
+                style: FilledButton.styleFrom(
+                  backgroundColor: isTracking ? Colors.red : null,
+                ),
+                icon: Icon(isTracking ? Icons.stop : Icons.play_arrow),
+                label: Text(
+                  isTracking ? 'Stop Run' : 'Start Run',
+                  style: const TextStyle(fontSize: 18),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: Center(
         child: SingleChildScrollView(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -678,40 +781,18 @@ class _LocationPageState extends State<LocationPage> {
 
                 const SizedBox(height: 10),
 
-                // Equipped cards (can only change between runs)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.backpack_outlined),
-                    title: Text(
-                      equippedCards == null
-                          ? 'Equipped cards: ...'
-                          : 'Equipped cards (${equippedCards!.length}/4)',
-                    ),
-                    subtitle: equippedCards == null || equippedCards!.isEmpty
-                        ? const Text('None equipped')
-                        : Text(
-                            equippedCards!.map((c) => c['name']).join(', '),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                    trailing: TextButton(
-                      onPressed: isTracking || isSubmitting || pendingSessionId != null
-                          ? null
-                          : openEquipCards,
-                      child: const Text('Change'),
-                    ),
-                  ),
-                ),
+                // Equipped support cards (can only change between runs)
+                buildCardSlots(context),
 
-                const SizedBox(height: 10),
+                const SizedBox(height: 20),
 
                 const Icon(
                   Icons.directions_run,
-                  size: 70,
+                  size: 60,
                   color: Colors.green,
                 ),
 
-                const SizedBox(height: 25),
+                const SizedBox(height: 10),
 
                 // Distance
                 const Text(
@@ -724,37 +805,6 @@ class _LocationPageState extends State<LocationPage> {
                   style: const TextStyle(
                     fontSize: 40,
                     fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 15),
-
-                // GPS Debug Panel
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade200,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'GPS DEBUG',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-
-                      const SizedBox(height: 5),
-
-                      Text(
-                        gpsDebugMessage,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ],
                   ),
                 ),
 
@@ -799,25 +849,44 @@ class _LocationPageState extends State<LocationPage> {
 
                 // Reward from the server
                 if (lastResult != null)
-                  Card(
-                    color: Colors.green.shade50,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          Text(
-                            '+${lastResult!['points_earned']} points',
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.green,
+                  TutorialTarget(
+                    id: 'run_result',
+                    child: Card(
+                      key: resultKey,
+                      color: Colors.green.shade50,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: [
+                            Text(
+                              '+${lastResult!['points_earned']} points',
+                              style: const TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
                             ),
-                          ),
-                          Text('for ${lastResult!['session_distance']} m'),
-                          ..._bonusBreakdown(lastResult!),
-                          if (lastResult!['already_processed'] == true)
-                            const Text('(this run was already saved)'),
-                        ],
+                            if (lastResult!['tutorial_only'] == true)
+                              const Text('Run skipped')
+                            else ...[
+                              Text('for ${lastResult!['session_distance']} m'),
+                              ..._bonusBreakdown(lastResult!),
+                              if (lastResult!['already_processed'] == true)
+                                const Text('(this run was already saved)'),
+                            ],
+                            if (lastResult!['tutorial_bonus'] != null) ...[
+                              const Divider(height: 20),
+                              Text(
+                                lastResult!['tutorial_bonus_failed'] == true
+                                    ? 'Tutorial bonus could not be added (no connection).'
+                                    : (lastResult!['tutorial_bonus'] as int) > 0
+                                        ? 'Tutorial bonus: +${lastResult!['tutorial_bonus']} points'
+                                        : 'Tutorial bonus already claimed',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -861,35 +930,110 @@ class _LocationPageState extends State<LocationPage> {
                     child: CircularProgressIndicator(),
                   ),
 
-                const SizedBox(height: 10),
-
-                // Start / Stop button
-                // (disabled while a finished run is waiting to be saved)
-                ElevatedButton.icon(
-                  onPressed: isSubmitting || (!isTracking && pendingSessionId != null)
-                      ? null
-                      : isTracking
-                          ? stopTracking
-                          : startTracking,
-
-                  icon: Icon(
-                    isTracking
-                        ? Icons.stop
-                        : Icons.play_arrow,
-                  ),
-
-                  label: Text(
-                    isTracking
-                        ? 'Stop Run'
-                        : 'Start Run',
-                  ),
-                ),
               ],
             ),
           ),
         ),
       ),
+      ),
     ),
+    );
+  }
+
+  /// The 4 support card slots: card art and name, or "+" when empty.
+  /// Tapping any slot opens the equip screen (not during a run).
+  Widget buildCardSlots(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final cards = equippedCards ?? const [];
+    final canChange = !isTracking && !isSubmitting && pendingSessionId == null;
+    // The tutorial highlights the first empty slot (or the first slot)
+    final tutorialSlot = cards.length < maxCardSlots ? cards.length : 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          equippedCards == null
+              ? 'Support cards'
+              : 'Support cards (${cards.length}/$maxCardSlots)',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: List.generate(maxCardSlots, (i) {
+            final card = i < cards.length ? cards[i] as Map<String, dynamic> : null;
+            final color =
+                card == null ? colors.outlineVariant : rarityColor(card['rarity']);
+
+            Widget slot = AspectRatio(
+              aspectRatio: 0.72,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: canChange ? openEquipCards : null,
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: color, width: 2),
+                    color: card == null
+                        ? colors.surfaceContainerHighest
+                        : color.withValues(alpha: 0.12),
+                  ),
+                  padding: const EdgeInsets.all(6),
+                  child: card == null
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add, size: 28, color: colors.onSurfaceVariant),
+                            Text(
+                              'Equip',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            Expanded(
+                              child: CardArt(card: card, color: color, iconSize: 28),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              card['name'] as String? ?? '',
+                              maxLines: 2,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            );
+            if (i == tutorialSlot) {
+              slot = TutorialTarget(id: 'run_slot', child: slot);
+            }
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: slot,
+              ),
+            );
+          }),
+        ),
+        if (!canChange && equippedCards != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              'Cards can be changed between runs.',
+              style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+            ),
+          ),
+      ],
     );
   }
 }

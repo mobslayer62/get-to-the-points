@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'tutorial.dart';
 import 'level_widgets.dart';
 import 'login_page.dart';
 import 'story_widgets.dart';
@@ -29,6 +30,7 @@ class _LevelPageState extends State<LevelPage> {
   @override
   void initState() {
     super.initState();
+    TutorialController.instance.report('open_level');
     _load();
   }
 
@@ -79,10 +81,13 @@ class _LevelPageState extends State<LevelPage> {
             const _LevelHeader(host: _host),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: LevelProgressCard(
-                level: level,
-                busy: _levelingUp,
-                onLevelUp: _levelUp,
+              child: TutorialTarget(
+                id: 'level_card',
+                child: LevelProgressCard(
+                  level: level,
+                  busy: _levelingUp,
+                  onLevelUp: _levelUp,
+                ),
               ),
             ),
             for (final lv in levels)
@@ -98,7 +103,8 @@ class _LevelPageState extends State<LevelPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Level')),
-      body: body,
+      // Keep content above the phone's navigation bar
+      body: SafeArea(top: false, child: body),
     );
   }
 }

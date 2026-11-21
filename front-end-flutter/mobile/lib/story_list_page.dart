@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'tutorial.dart';
 import 'level_widgets.dart';
 import 'login_page.dart';
 import 'story_reader_page.dart';
@@ -24,6 +25,7 @@ class _StoryListPageState extends State<StoryListPage> {
   @override
   void initState() {
     super.initState();
+    TutorialController.instance.report('open_story');
     _load();
   }
 
@@ -109,7 +111,8 @@ class _StoryListPageState extends State<StoryListPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Story')),
-      body: body,
+      // Keep content above the phone's navigation bar
+      body: SafeArea(top: false, child: body),
     );
   }
 }

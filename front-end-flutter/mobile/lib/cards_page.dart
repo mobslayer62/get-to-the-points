@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'tutorial.dart';
 import 'equip_cards_page.dart';
 import 'login_page.dart';
 
@@ -19,6 +20,7 @@ class _CardsPageState extends State<CardsPage> {
   @override
   void initState() {
     super.initState();
+    TutorialController.instance.report('open_cards');
     _load();
   }
 
@@ -52,7 +54,7 @@ class _CardsPageState extends State<CardsPage> {
       body = const Center(child: CircularProgressIndicator());
     } else if (cards.isEmpty) {
       body = const Center(
-        child: Text('No cards yet. Earn points and pull from the gacha!'),
+        child: Text('No cards yet. Earn points and capture some!'),
       );
     } else {
       body = GridView.builder(
@@ -150,7 +152,8 @@ class _CardsPageState extends State<CardsPage> {
           ),
         ],
       ),
-      body: body,
+      // Keep content above the phone's navigation bar
+      body: SafeArea(top: false, child: body),
     );
   }
 }

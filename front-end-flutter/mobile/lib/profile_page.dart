@@ -53,7 +53,10 @@ class _ProfilePageState extends State<ProfilePage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile & settings')),
-      body: ListView(
+      // Keep content above the phone's navigation bar
+      body: SafeArea(
+        top: false,
+        child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           ListTile(
@@ -107,6 +110,7 @@ class _ProfilePageState extends State<ProfilePage> {
             label: const Text('Log out'),
           ),
         ],
+      ),
       ),
     );
   }

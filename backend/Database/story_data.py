@@ -58,6 +58,12 @@ CHAPTERS = [
 
 CHAPTERS_BY_ID = {chapter["id"]: chapter for chapter in CHAPTERS}
 
+# Given the first time a player finishes a chapter (see onboarding.py).
+# "card" rewards use the card's exact name from the Card table.
+CHAPTER_REWARDS = {
+    "chapter-1": [{"type": "card", "name": "Office of Global Affairs"}],
+}
+
 
 def character_info(key):
     """Public view of one character, as sent to the app."""
@@ -85,6 +91,12 @@ def _check_story():
             speaker = line.get("speaker", "")
             if speaker and speaker not in cast:
                 raise ValueError(f"{cid}: speaker {speaker} is not in the cast")
+    for chapter_id, rewards in CHAPTER_REWARDS.items():
+        if chapter_id not in CHAPTERS_BY_ID:
+            raise ValueError(f"Rewards for unknown chapter {chapter_id}")
+        for reward in rewards:
+            if reward.get("type") != "card" or not reward.get("name"):
+                raise ValueError(f"Bad reward for {chapter_id}: {reward}")
 
 
 _check_story()

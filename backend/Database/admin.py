@@ -1,8 +1,8 @@
 from django.contrib import admin
 
 from .models import (
-    Card, EquippedCard, SessionStart, StoryProgress, UserActivity, UserCard,
-    WalkingSession,
+    Card, EquippedCard, GachaPull, SessionStart, StoryProgress, UserActivity,
+    UserCard, WalkingSession,
 )
 
 
@@ -22,7 +22,10 @@ class EquippedCardAdmin(admin.ModelAdmin):
 
 @admin.register(UserActivity)
 class UserActivityAdmin(admin.ModelAdmin):
-    list_display = ("user", "level", "total_points", "total_distance", "total_steps")
+    list_display = (
+        "user", "level", "total_points", "total_distance", "total_steps",
+        "pulls_since_s", "total_pulls",
+    )
     search_fields = ("user__username",)
 
 
@@ -63,3 +66,10 @@ class StoryProgressAdmin(admin.ModelAdmin):
     list_display = ["user", "chapter_id", "completed_at"]
     list_filter = ["chapter_id"]
     search_fields = ["user__username"]
+
+
+@admin.register(GachaPull)
+class GachaPullAdmin(admin.ModelAdmin):
+    list_display = ["user", "card", "rarity", "was_pity", "pulled_at"]
+    list_filter = ["rarity", "was_pity"]
+    search_fields = ["user__username", "card__name"]

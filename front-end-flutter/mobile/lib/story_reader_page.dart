@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'equip_cards_page.dart' show CardArt, rarityColor;
 import 'story_widgets.dart';
 
 /// Visual-novel reader. The chapter's cast stands on screen; whoever is
@@ -32,6 +33,7 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
   int _index = 0;
   int _visibleChars = 0;
   bool _finished = false;
+  List<Map<String, dynamic>> _rewards = [];
   Timer? _typer;
 
   @override
@@ -104,7 +106,12 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
   Future<void> _finish() async {
     setState(() => _finished = true);
     try {
-      await ApiService.completeChapter(widget.chapterId);
+      final result = await ApiService.completeChapter(widget.chapterId);
+      if (!mounted) return;
+      setState(() {
+        _rewards = (result['rewards'] as List<dynamic>? ?? [])
+            .cast<Map<String, dynamic>>();
+      });
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -141,7 +148,7 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
     } else if (lines == null) {
       content = const Center(child: CircularProgressIndicator());
     } else if (_finished) {
-      content = _EndPanel(title: widget.title);
+      content = _EndPanel(title: widget.title, rewards: _rewards);
     } else if (lines.isEmpty) {
       content = const Center(
         child: Text('This chapter is empty.',
@@ -295,7 +302,9 @@ class _DialogueBox extends StatelessWidget {
 class _EndPanel extends StatelessWidget {
   final String title;
 
-  const _EndPanel({required this.title});
+  final List<Map<String, dynamic>> rewards;
+
+  const _EndPanel({required this.title, this.rewards = const []});
 
   @override
   Widget build(BuildContext context) {
@@ -312,6 +321,45 @@ class _EndPanel extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 22, color: Colors.white),
             ),
+            // First-time chapter rewards (e.g. a support card)
+            for (final reward in rewards) ...[
+              const SizedBox(height: 20),
+              const Text(
+                'You received a support card!',
+                style: TextStyle(color: Colors.amber, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: 160,
+                height: 200,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: rarityColor(reward['rarity']), width: 3),
+                ),
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: CardArt(
+                        card: reward,
+                        color: rarityColor(reward['rarity']),
+                        iconSize: 56,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      reward['name'] as String? ?? '',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(),
