@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'tutorial.dart';
 import 'login_page.dart';
 
 /// List of past runs from GET /api/activity-history/.
@@ -18,6 +19,7 @@ class _ActivityHistoryPageState extends State<ActivityHistoryPage> {
   @override
   void initState() {
     super.initState();
+    TutorialController.instance.report('open_stats');
     _load();
   }
 
@@ -94,7 +96,8 @@ class _ActivityHistoryPageState extends State<ActivityHistoryPage> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Activity history')),
-      body: body,
+      // Keep content above the phone's navigation bar
+      body: SafeArea(top: false, child: body),
     );
   }
 }

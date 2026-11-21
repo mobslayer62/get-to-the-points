@@ -19,6 +19,10 @@ from .views import (
     StoryListView,
     StoryChapterView,
     StoryCompleteView,
+    GachaInfoView,
+    GachaPullView,
+    TutorialView,
+    TutorialRunBonusView,
 )
 
 router = routers.DefaultRouter()
@@ -42,4 +46,8 @@ urlpatterns = [
     path("story/", StoryListView.as_view(), name="story-list"),
     path("story/<slug:chapter_id>/", StoryChapterView.as_view(), name="story-chapter"),
     path("story/<slug:chapter_id>/complete/", StoryCompleteView.as_view(), name="story-complete"),
+    path("gacha/", GachaInfoView.as_view(), name="gacha"),
+    path("gacha/pull/", GachaPullView.as_view(), name="gacha-pull"),
+    path("tutorial/", TutorialView.as_view(), name="tutorial"),
+    path("tutorial/run-bonus/", TutorialRunBonusView.as_view(), name="tutorial-run-bonus"),
 ]

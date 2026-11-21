@@ -8,9 +8,12 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
+import random
+
+from . import gacha
 from .models import (
-    Card, EquippedCard, SessionStart, StoryProgress, UserActivity, UserCard,
-    WalkingSession,
+    Card, EquippedCard, GachaPull, SessionStart, StoryProgress, UserActivity,
+    UserCard, WalkingSession,
 )
 from .progression import LEVEL_UP_COSTS, MAX_LEVEL, level_up_cost
 from .story_data import CHAPTERS, CHARACTERS
@@ -947,3 +950,308 @@ class LevelTabApiTests(TestCase):
         self.assertTrue(level["can_level_up"])
         self.assertEqual(level["next_level_rewards"][0]["id"], "chapter-2")
 
+
+class FixedRng:
+    """Fake random source for tests: random() cycles through `values`,
+    choice() always takes the first item."""
+
+    def __init__(self, values):
+        self.values = list(values)
+        self.i = 0
+
+    def random(self):
+        value = self.values[self.i % len(self.values)]
+        self.i += 1
+        return value
+
+    def choice(self, seq):
+        return seq[0]
+
+
+ROLL_A = 0.5    # 50  -> A
+ROLL_AP = 0.1   # 10  -> A+
+ROLL_S = 0.01   # 1   -> S
+
+
+class GachaRulesTests(TestCase):
+    """Uses the 10 cards seeded by migration 0011 (2 S, 3 A+, 5 A)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("gacharunner", password=STRONG_PASSWORD)
+        self.activity = UserActivity.objects.create(user=self.user, total_points=1000)
+
+    def refresh(self):
+        self.activity.refresh_from_db()
+        return self.activity
+
+    def test_design_numbers(self):
+        self.assertEqual(gacha.SINGLE_PULL_COST, 20)
+        self.assertEqual(gacha.TEN_PULL_COST, 180)
+        self.assertEqual(dict(gacha.RATES), {"S": 2, "A+": 18, "A": 80})
+        self.assertEqual(gacha.PITY_PULLS, 50)
+
+    def test_seeded_catalog_has_every_rarity(self):
+        counts = {r: Card.objects.filter(rarity=r).count() for r in ["S", "A+", "A"]}
+        self.assertEqual(counts, {"S": 2, "A+": 3, "A": 5})
+
+    def test_roll_rates_over_many_pulls(self):
+        rng = random.Random(42)
+        n = 100_000
+        rolls = [gacha.roll_rarity(rng) for _ in range(n)]
+        self.assertAlmostEqual(rolls.count("S") / n * 100, 2, delta=0.3)
+        self.assertAlmostEqual(rolls.count("A+") / n * 100, 18, delta=0.8)
+        self.assertAlmostEqual(rolls.count("A") / n * 100, 80, delta=0.8)
+
+    def test_single_pull_spends_points_and_stores_card(self):
+        results, activity = gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["rarity"], "A")
+        self.assertTrue(results[0]["is_new"])
+        self.assertEqual(self.refresh().total_points, 980)
+        self.assertEqual(self.activity.total_pulls, 1)
+        self.assertEqual(self.activity.pulls_since_s, 1)
+        self.assertEqual(UserCard.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(GachaPull.objects.filter(user=self.user).count(), 1)
+
+    def test_ten_pull_costs_180(self):
+        results, _ = gacha.pull(self.user, 10, random.Random(1))
+        self.assertEqual(len(results), 10)
+        self.assertEqual(self.refresh().total_points, 820)
+        self.assertEqual(self.activity.total_pulls, 10)
+
+    def test_not_enough_points_changes_nothing(self):
+        self.activity.total_points = 19
+        self.activity.save()
+        with self.assertRaises(gacha.GachaError):
+            gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(self.refresh().total_points, 19)
+        self.assertEqual(UserCard.objects.count(), 0)
+        self.assertEqual(GachaPull.objects.count(), 0)
+
+    def test_only_1_or_10(self):
+        with self.assertRaises(gacha.GachaError):
+            gacha.pull(self.user, 5, FixedRng([ROLL_A]))
+
+    def test_duplicate_adds_quantity(self):
+        gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        results, _ = gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertFalse(results[0]["is_new"])
+        self.assertEqual(UserCard.objects.get(user=self.user).quantity, 2)
+
+    def test_pity_on_50th_pull(self):
+        self.activity.pulls_since_s = 49
+        self.activity.save()
+        results, activity = gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(results[0]["rarity"], "S")
+        self.assertTrue(results[0]["pity"])
+        self.assertEqual(activity.pulls_since_s, 0)
+        self.assertTrue(GachaPull.objects.get(user=self.user).was_pity)
+
+    def test_pity_prefers_unowned_s(self):
+        first_s, second_s = Card.objects.filter(rarity="S").order_by("id")
+        UserCard.objects.create(user=self.user, card=first_s)
+        self.activity.pulls_since_s = 49
+        self.activity.save()
+        results, _ = gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(results[0]["card_id"], second_s.id)
+        self.assertTrue(results[0]["is_new"])
+
+    def test_pity_gives_any_s_when_all_owned(self):
+        for card in Card.objects.filter(rarity="S"):
+            UserCard.objects.create(user=self.user, card=card)
+        self.activity.pulls_since_s = 49
+        self.activity.save()
+        results, _ = gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(results[0]["rarity"], "S")
+        self.assertFalse(results[0]["is_new"])
+
+    def test_lucky_s_resets_counter(self):
+        self.activity.pulls_since_s = 10
+        self.activity.save()
+        results, activity = gacha.pull(self.user, 1, FixedRng([ROLL_S]))
+        self.assertEqual(results[0]["rarity"], "S")
+        self.assertFalse(results[0]["pity"])
+        self.assertEqual(activity.pulls_since_s, 0)
+
+    def test_pity_inside_a_ten_pull(self):
+        self.activity.pulls_since_s = 45
+        self.activity.save()
+        results, activity = gacha.pull(self.user, 10, FixedRng([ROLL_A]))
+        self.assertEqual(results[4]["rarity"], "S")
+        self.assertTrue(results[4]["pity"])
+        self.assertEqual(activity.pulls_since_s, 5)
+
+    def test_ten_pull_guarantees_a_plus(self):
+        results, _ = gacha.pull(self.user, 10, FixedRng([ROLL_A]))
+        self.assertEqual([r["rarity"] for r in results[:9]], ["A"] * 9)
+        self.assertEqual(results[9]["rarity"], "A+")
+        self.assertTrue(results[9]["guaranteed"])
+
+    def test_no_guarantee_needed_if_a_plus_already_pulled(self):
+        results, _ = gacha.pull(self.user, 10, FixedRng([ROLL_AP] + [ROLL_A] * 9))
+        self.assertEqual(results[0]["rarity"], "A+")
+        self.assertEqual(results[9]["rarity"], "A")
+        self.assertFalse(results[9]["guaranteed"])
+
+    def test_empty_catalog(self):
+        Card.objects.all().delete()
+        with self.assertRaises(gacha.GachaError):
+            gacha.pull(self.user, 1, FixedRng([ROLL_A]))
+        self.assertEqual(self.refresh().total_points, 1000)
+
+    def test_missing_rarity_falls_back(self):
+        Card.objects.filter(rarity="S").delete()
+        results, _ = gacha.pull(self.user, 1, FixedRng([ROLL_S]))
+        self.assertEqual(results[0]["rarity"], "A+")
+
+
+class GachaApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("gachaapi", password=STRONG_PASSWORD)
+        token = Token.objects.create(user=self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+        UserActivity.objects.create(user=self.user, total_points=200)
+
+    def test_info(self):
+        res = self.client.get("/api/gacha/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["single_cost"], 20)
+        self.assertEqual(res.data["ten_cost"], 180)
+        self.assertTrue(res.data["can_ten"])
+        self.assertEqual(res.data["pulls_until_pity"], 50)
+        self.assertEqual(len(res.data["pool"]["S"]), 2)
+
+    def test_pull_one(self):
+        res = self.client.post("/api/gacha/pull/", {"count": 1}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data["results"]), 1)
+        self.assertIn("name", res.data["results"][0])
+        self.assertEqual(res.data["gacha"]["points"], 180)
+
+    def test_pull_ten(self):
+        res = self.client.post("/api/gacha/pull/", {"count": 10}, format="json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data["results"]), 10)
+        self.assertEqual(res.data["gacha"]["points"], 20)
+        rarities = [r["rarity"] for r in res.data["results"]]
+        self.assertTrue(any(r in ("A+", "S") for r in rarities))
+
+    def test_not_enough_points(self):
+        self.client.post("/api/gacha/pull/", {"count": 10}, format="json")
+        res = self.client.post("/api/gacha/pull/", {"count": 10}, format="json")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("more points", res.data["error"])
+
+    def test_bad_count(self):
+        res = self.client.post("/api/gacha/pull/", {"count": "lots"}, format="json")
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post("/api/gacha/pull/", {"count": 3}, format="json")
+        self.assertEqual(res.status_code, 400)
+
+    def test_requires_login(self):
+        self.client.credentials()
+        self.assertEqual(self.client.post("/api/gacha/pull/", {"count": 1}).status_code, 401)
+
+    def test_pulled_cards_show_in_storage(self):
+        self.client.post("/api/gacha/pull/", {"count": 10}, format="json")
+        storage = self.client.get("/api/card-storage/").data
+        self.assertEqual(storage["total_cards"], 10)
+
+    def test_home_shows_pity(self):
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.data["gacha"]["pulls_until_pity"], 50)
+
+
+
+class OnboardingTests(TestCase):
+    """Starter card, Chapter 1 card, tutorial and its one-time run bonus."""
+
+    def register(self, username="newplayer"):
+        client = APIClient()
+        res = client.post(
+            "/api/register/",
+            {"username": username, "password": STRONG_PASSWORD},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 201)
+        client.credentials(HTTP_AUTHORIZATION=f"Token {res.data['token']}")
+        return client, User.objects.get(username=username)
+
+    def owned_names(self, user):
+        return set(
+            UserCard.objects.filter(user=user).values_list("card__name", flat=True)
+        )
+
+    # ----- cards -----
+
+    def test_sign_up_gives_starter_card(self):
+        _, user = self.register()
+        self.assertEqual(self.owned_names(user), {"NTHU Main Gate"})
+
+    def test_sign_up_still_works_without_starter_card(self):
+        Card.objects.filter(name="NTHU Main Gate").delete()
+        _, user = self.register()
+        self.assertEqual(self.owned_names(user), set())
+
+    def test_chapter_1_gives_office_of_global_affairs_once(self):
+        client, user = self.register()
+        first = client.post("/api/story/chapter-1/complete/")
+        self.assertEqual([r["name"] for r in first.data["rewards"]], ["Office of Global Affairs"])
+        self.assertEqual(first.data["rewards"][0]["rarity"], "A")
+
+        second = client.post("/api/story/chapter-1/complete/")
+        self.assertEqual(second.data["rewards"], [])
+        card = UserCard.objects.get(user=user, card__name="Office of Global Affairs")
+        self.assertEqual(card.quantity, 1)
+
+    def test_other_chapters_give_no_card(self):
+        client, user = self.register()
+        activity = UserActivity.objects.get(user=user)
+        activity.level = 3
+        activity.save()
+        res = client.post("/api/story/chapter-2/complete/")
+        self.assertEqual(res.data["rewards"], [])
+
+    # ----- tutorial -----
+
+    def test_tutorial_steps(self):
+        client, _ = self.register("daniel")
+        data = client.get("/api/tutorial/").data
+        steps = data["steps"]
+        self.assertEqual(steps[0]["id"], "welcome")
+        self.assertEqual(steps[-1]["id"], "end")
+        profile = next(s for s in steps if s["id"] == "profile")
+        self.assertIn("daniel", profile["text"])
+        for step in steps:
+            self.assertNotIn("{", step["text"])
+            if step["mode"] in ("tap", "run"):
+                self.assertTrue(step["target"])
+                self.assertTrue(step["advance_on"])
+        self.assertEqual([s["mode"] for s in steps].count("run"), 1)
+        self.assertEqual(data["starter_card_name"], "NTHU Main Gate")
+        self.assertEqual(data["bonus_points"], 100)
+        self.assertFalse(data["bonus_claimed"])
+
+    def test_tutorial_capture_text_uses_real_prices(self):
+        client, _ = self.register()
+        steps = client.get("/api/tutorial/").data["steps"]
+        text = next(s for s in steps if s["id"] == "capture_explained")["text"]
+        self.assertIn("20 points", text)
+        self.assertIn("180 points instead of 200", text)
+
+    def test_run_bonus_only_once(self):
+        client, user = self.register()
+        first = client.post("/api/tutorial/run-bonus/")
+        self.assertEqual(first.data["awarded"], 100)
+        self.assertEqual(first.data["total_points"], 100)
+
+        second = client.post("/api/tutorial/run-bonus/")
+        self.assertEqual(second.data["awarded"], 0)
+        self.assertEqual(UserActivity.objects.get(user=user).total_points, 100)
+        self.assertTrue(client.get("/api/tutorial/").data["bonus_claimed"])
+
+    def test_tutorial_requires_login(self):
+        client = APIClient()
+        self.assertEqual(client.get("/api/tutorial/").status_code, 401)
+        self.assertEqual(client.post("/api/tutorial/run-bonus/").status_code, 401)

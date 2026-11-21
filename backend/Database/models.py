@@ -21,6 +21,13 @@ class UserActivity(models.Model):
     # Story level (1-5). Raised by spending points, see progression.py
     level = models.PositiveSmallIntegerField(default=1)
 
+    # Gacha: pulls since the last S card (for pity), and lifetime pulls
+    pulls_since_s = models.PositiveIntegerField(default=0)
+    total_pulls = models.PositiveIntegerField(default=0)
+
+    # The tutorial's run bonus can only be claimed once
+    tutorial_bonus_claimed = models.BooleanField(default=False)
+
 class WalkingSession(models.Model):
     session_id = models.UUIDField(
         default=uuid.uuid4,
@@ -313,3 +320,26 @@ class StoryProgress(models.Model):
                 name="unique_chapter_per_user"
             )
         ]
+
+
+class GachaPull(models.Model):
+    """One row per card pulled from the gacha (history / auditing)."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="gacha_pulls"
+    )
+
+    card = models.ForeignKey(
+        Card,
+        on_delete=models.CASCADE
+    )
+
+    # Rarity at the time of the pull, in case the card is changed later
+    rarity = models.CharField(max_length=20)
+
+    # True if this S came from the pity guarantee
+    was_pity = models.BooleanField(default=False)
+
+    pulled_at = models.DateTimeField(auto_now_add=True)

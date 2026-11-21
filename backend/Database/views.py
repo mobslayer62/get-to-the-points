@@ -461,4 +461,77 @@ class StoryCompleteView(APIView):
         except ProgressionError as e:
             return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
 
-        return Response({"completed": True, "first_time": first_time})
+        from .onboarding import grant_chapter_rewards
+
+        rewards = grant_chapter_rewards(request.user, chapter_id) if first_time else []
+        return Response({
+            "completed": True,
+            "first_time": first_time,
+            "rewards": rewards,
+        })
+
+
+# ----- Gacha -----
+
+class GachaInfoView(APIView):
+    """GET costs, rates, the player's pity counter and the card pool."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .gacha import gacha_info
+        from .progression import get_activity
+
+        return Response(gacha_info(get_activity(request.user)))
+
+
+class GachaPullView(APIView):
+    """POST {"count": 1 | 10}: spend points and pull cards."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .gacha import GachaError, gacha_info, pull
+
+        try:
+            count = int(request.data.get("count", 1))
+        except (TypeError, ValueError):
+            return Response({"error": "count must be a number."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            results, activity = pull(request.user, count)
+        except GachaError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "results": results,
+            "gacha": gacha_info(activity),
+        })
+
+
+# ----- Tutorial -----
+
+class TutorialView(APIView):
+    """GET the tutorial steps, filled in for this player."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .onboarding import tutorial_for
+
+        return Response(tutorial_for(request.user))
+
+
+class TutorialRunBonusView(APIView):
+    """POST once at the tutorial's run step (run finished or skipped)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .onboarding import claim_tutorial_run_bonus
+
+        awarded, activity = claim_tutorial_run_bonus(request.user)
+        return Response({
+            "awarded": awarded,
+            "total_points": activity.total_points,
+        })

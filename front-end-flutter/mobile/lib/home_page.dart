@@ -5,15 +5,20 @@ import 'activity_history_page.dart';
 import 'api_service.dart';
 import 'cards_page.dart';
 import 'coming_soon_page.dart';
+import 'gacha_page.dart';
 import 'level_page.dart';
 import 'login_page.dart';
 import 'main.dart';
 import 'profile_page.dart';
 import 'story_list_page.dart';
+import 'tutorial.dart';
 
 /// Main menu. All numbers shown here come from GET /api/home/.
 class MainMenuPage extends StatefulWidget {
-  const MainMenuPage({super.key});
+  /// True right after sign-up: the tutorial starts by itself.
+  final bool startTutorial;
+
+  const MainMenuPage({super.key, this.startTutorial = false});
 
   @override
   State<MainMenuPage> createState() => _MainMenuPageState();
@@ -23,11 +28,21 @@ class _MainMenuPageState extends State<MainMenuPage> {
   Map<String, dynamic>? _home;
   String? _error;
   bool _loading = true;
+  bool _tutorialAutoStarted = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  Future<void> _startTutorial() async {
+    final ok = await TutorialController.instance.start();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load the tutorial. Try again later.')),
+      );
+    }
   }
 
   Future<void> _load() async {
@@ -39,6 +54,10 @@ class _MainMenuPageState extends State<MainMenuPage> {
       final home = await ApiService.getHome();
       if (!mounted) return;
       setState(() => _home = home);
+      if (widget.startTutorial && !_tutorialAutoStarted) {
+        _tutorialAutoStarted = true;
+        _startTutorial();
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.statusCode == 401) {
@@ -55,6 +74,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
   /// (points or cards may have changed).
   Future<void> _open(Widget page) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    TutorialController.instance.report('home');
     if (mounted) _load();
   }
 
@@ -98,6 +118,12 @@ class _MainMenuPageState extends State<MainMenuPage> {
     final next = story['next_to_read'] as String?;
     if (next != null) return next;
     return '${story['unlocked']} / ${story['total']} unlocked';
+  }
+
+  String get _gachaSubtitle {
+    final gacha = _home?['gacha'] as Map<String, dynamic>?;
+    if (gacha == null) return '...';
+    return 'S within ${gacha['pulls_until_pity']} captures';
   }
 
   String get _cardsSubtitle {
@@ -144,7 +170,9 @@ class _MainMenuPageState extends State<MainMenuPage> {
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             // Tap to open the Level tab
-                            child: ActionChip(
+                            child: TutorialTarget(
+                              id: 'home_level',
+                              child: ActionChip(
                               visualDensity: VisualDensity.compact,
                               avatar: const Icon(Icons.trending_up, size: 18),
                               label: Row(
@@ -155,6 +183,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
                                 ],
                               ),
                               onPressed: () => _open(const LevelPage()),
+                              ),
                             ),
                           ),
                       ],
@@ -162,7 +191,9 @@ class _MainMenuPageState extends State<MainMenuPage> {
                   ),
                   Column(
                     children: [
-                      InkWell(
+                      TutorialTarget(
+                        id: 'home_profile',
+                        child: InkWell(
                         customBorder: const CircleBorder(),
                         onTap: () => _open(const ProfilePage()),
                         child: CircleAvatar(
@@ -177,8 +208,11 @@ class _MainMenuPageState extends State<MainMenuPage> {
                           ),
                         ),
                       ),
+                      ),
                       const SizedBox(height: 6),
-                      Row(
+                      TutorialTarget(
+                        id: 'home_points',
+                        child: Row(
                         children: [
                           const Icon(Icons.stars, size: 18, color: Colors.amber),
                           const SizedBox(width: 4),
@@ -187,6 +221,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                         ],
+                      ),
                       ),
                     ],
                   ),
@@ -219,7 +254,9 @@ class _MainMenuPageState extends State<MainMenuPage> {
               const SizedBox(height: 24),
 
               // ----- Start run -----
-              SizedBox(
+              TutorialTarget(
+                id: 'home_start_run',
+                child: SizedBox(
                 height: 96,
                 child: FilledButton(
                   style: FilledButton.styleFrom(
@@ -238,6 +275,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
                   ),
                 ),
               ),
+              ),
 
               const SizedBox(height: 16),
 
@@ -251,28 +289,32 @@ class _MainMenuPageState extends State<MainMenuPage> {
                 childAspectRatio: 1.2,
                 children: [
                   _MenuTile(
+                    tutorialId: 'home_stats',
                     icon: Icons.bar_chart,
                     title: 'Stats',
                     subtitle: _statsSubtitle,
                     onTap: () => _open(const ActivityHistoryPage()),
                   ),
                   _MenuTile(
+                    tutorialId: 'home_story',
                     icon: Icons.menu_book,
                     title: 'Story',
                     subtitle: _storySubtitle,
                     onTap: () => _open(const StoryListPage()),
                   ),
                   _MenuTile(
+                    tutorialId: 'home_cards',
                     icon: Icons.style,
                     title: 'Cards',
                     subtitle: _cardsSubtitle,
                     onTap: () => _open(const CardsPage()),
                   ),
                   _MenuTile(
-                    icon: Icons.auto_awesome,
-                    title: 'Gacha',
-                    subtitle: 'Coming soon',
-                    onTap: () => _comingSoon('Gacha', Icons.auto_awesome),
+                    tutorialId: 'home_capture',
+                    icon: Icons.camera_alt,
+                    title: 'Capture',
+                    subtitle: _gachaSubtitle,
+                    onTap: () => _open(const GachaPage()),
                   ),
                 ],
               ),
@@ -285,6 +327,17 @@ class _MainMenuPageState extends State<MainMenuPage> {
                   onPressed: _confirmExit,
                   icon: const Icon(Icons.exit_to_app),
                   label: const Text('Exit game'),
+                ),
+              ),
+              Center(
+                child: TextButton.icon(
+                  onPressed: _startTutorial,
+                  icon: const Icon(Icons.school_outlined, size: 18),
+                  label: const Text('Tutorial'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    textStyle: const TextStyle(fontSize: 13),
+                  ),
                 ),
               ),
             ],
@@ -317,12 +370,14 @@ class _MainMenuPageState extends State<MainMenuPage> {
 }
 
 class _MenuTile extends StatelessWidget {
+  final String tutorialId;
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
   const _MenuTile({
+    required this.tutorialId,
     required this.icon,
     required this.title,
     required this.subtitle,
@@ -332,7 +387,9 @@ class _MenuTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Card(
+    return TutorialTarget(
+      id: tutorialId,
+      child: Card(
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -369,6 +426,7 @@ class _MenuTile extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }

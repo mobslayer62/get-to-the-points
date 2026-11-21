@@ -57,7 +57,10 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const MainMenuPage()),
+        // New players see the tutorial straight away
+        MaterialPageRoute(
+          builder: (_) => MainMenuPage(startTutorial: _isRegisterMode),
+        ),
       );
     } on ApiException catch (e) {
       if (!mounted) return;

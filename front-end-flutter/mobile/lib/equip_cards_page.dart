@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api_service.dart';
+import 'tutorial.dart';
 import 'login_page.dart';
 
 /// Pick up to 4 unique cards to bring into your runs.
@@ -31,7 +32,27 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
   @override
   void initState() {
     super.initState();
+    TutorialController.instance.report('open_equip');
+    TutorialController.instance.addListener(_tutorialCatchUp);
     _load();
+  }
+
+  @override
+  void dispose() {
+    TutorialController.instance.removeListener(_tutorialCatchUp);
+    super.dispose();
+  }
+
+  /// If the player replays the tutorial with cards already equipped and
+  /// saved, move past the "equip" and "save" steps by themselves.
+  void _tutorialCatchUp() {
+    final tutorial = TutorialController.instance;
+    if (!mounted || _loading || _equipped.isEmpty) return;
+    if (tutorial.isWaitingFor('equip_selected')) {
+      tutorial.report('equip_selected');
+    } else if (tutorial.isWaitingFor('equip_saved') && !_dirty) {
+      tutorial.report('equip_saved');
+    }
   }
 
   Future<void> _load() async {
@@ -55,7 +76,9 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
           ..addAll(equippedIds);
         _saved = List.of(equippedIds);
         _error = null;
+        _loading = false;
       });
+      _tutorialCatchUp();
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.statusCode == 401) {
@@ -74,6 +97,7 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
         _equipped.remove(cardId);
       } else if (_equipped.length < _maxSlots) {
         _equipped.add(cardId);
+        TutorialController.instance.report('equip_selected');
       }
     });
   }
@@ -102,6 +126,7 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Loadout saved')),
       );
+      TutorialController.instance.report('equip_saved');
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.statusCode == 401) {
@@ -138,7 +163,7 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
           Expanded(
             child: _owned.isEmpty
                 ? const Center(
-                    child: Text('No cards yet. Earn points and pull from the gacha!'),
+                    child: Text('No cards yet. Earn points and capture some!'),
                   )
                 : _buildOwnedGrid(),
           ),
@@ -173,7 +198,9 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
         appBar: AppBar(
           title: Text('Equip cards (${_equipped.length}/$_maxSlots)'),
           actions: [
-            TextButton(
+            TutorialTarget(
+              id: 'equip_save',
+              child: TextButton(
               onPressed: _saving || !_dirty ? null : _save,
               child: _saving
                   ? const SizedBox(
@@ -182,10 +209,12 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Save'),
+              ),
             ),
           ],
         ),
-        body: body,
+        // Keep content above the phone's navigation bar
+        body: SafeArea(top: false, child: body),
       ),
     );
   }
@@ -281,7 +310,14 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
         final slotIndex = _equipped.indexOf(id);
         final isEquipped = slotIndex != -1;
 
-        return Card(
+        // The tutorial points at the starter card (or the first card if
+        // the player doesn't own it)
+        final starterName = TutorialController.instance.starterCardName;
+        final ownsStarter = _owned.any((o) => o['name'] == starterName);
+        final isTutorialCard =
+            ownsStarter ? c['name'] == starterName : i == 0;
+
+        final card = Card(
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -345,6 +381,9 @@ class _EquipCardsPageState extends State<EquipCardsPage> {
             ),
           ),
         );
+        return isTutorialCard
+            ? TutorialTarget(id: 'equip_starter_card', child: card)
+            : card;
       },
     );
   }

@@ -54,6 +54,9 @@ class RegisterSerializer(serializers.Serializer):
             password=validated_data["password"],
         )
         UserActivity.objects.create(user=user)
+
+        from .onboarding import give_starter_card
+        give_starter_card(user)
         return user
 
 

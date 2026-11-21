@@ -236,6 +236,7 @@ def build_home_summary(user):
     makes a single request when the menu opens.
     """
     from .models import Card, UserCard, WalkingSession
+    from .gacha import PITY_PULLS as PITY_PULLS_FOR_HOME
     from .progression import level_summary, story_overview
 
     activity, chapters = story_overview(user)
@@ -261,6 +262,11 @@ def build_home_summary(user):
             "catalog_size": Card.objects.count(),
         },
         "level": level_summary(activity),
+        "gacha": {
+            "pulls_until_pity": max(
+                PITY_PULLS_FOR_HOME - activity.pulls_since_s, 1
+            ),
+        },
         "story": {
             "unlocked": sum(c["unlocked"] for c in chapters),
             "total": len(chapters),
