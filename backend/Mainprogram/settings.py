@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -19,13 +20,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
+# On your laptop nothing needs to be set: these defaults are used.
+# On the online server (PythonAnywhere) the WSGI file sets:
+#   DJANGO_DEBUG=0, DJANGO_SECRET_KEY=<long random string>,
+#   DJANGO_ALLOWED_HOSTS=<username>.pythonanywhere.com
+# See backend/deploy/README.md.
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-1f^*r-z=cz2r9g#f46s31mifdm9-c)4a0xfzx6*)9coqzs@vb0'
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-1f^*r-z=cz2r9g#f46s31mifdm9-c)4a0xfzx6*)9coqzs@vb0",
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
 
 
 # Application definition
@@ -81,11 +89,23 @@ REST_FRAMEWORK = {
 WSGI_APPLICATION = 'Mainprogram.wsgi.application'
 # During development, accept any host so a real phone can reach the server
 # through your PC's Wi-Fi IP (which changes between networks).
-# Lock this down before deploying (Week 15).
+# Online, only the hosts listed in DJANGO_ALLOWED_HOSTS are accepted.
 if DEBUG:
     ALLOWED_HOSTS = ["*"]
 else:
-    ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+    ALLOWED_HOSTS = [
+        host.strip()
+        for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ] or ["127.0.0.1", "localhost"]
+
+    # The admin login form is sent over https from these addresses
+    CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS]
+
+    # PythonAnywhere handles https in front of Django
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 
 # Database
@@ -134,6 +154,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# `python manage.py collectstatic` copies the admin's CSS/JS here so the
+# online server can serve them (PythonAnywhere: Web tab -> Static files)
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # Email
