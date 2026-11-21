@@ -269,6 +269,9 @@ class CardStorageTests(TestCase):
 
 class HomeSummaryApiTests(TestCase):
     def setUp(self):
+        # Migration 0011 seeds the real card catalog; start these tests from
+        # an empty catalog so the counts below only see cards made here.
+        Card.objects.all().delete()
         self.user = User.objects.create_user("runner1", password=STRONG_PASSWORD)
         token = Token.objects.create(user=self.user)
         self.client = APIClient()
