@@ -235,9 +235,10 @@ def build_home_summary(user):
     Everything the main menu shows, in one response, so the app
     makes a single request when the menu opens.
     """
-    from .models import Card, UserActivity, UserCard, WalkingSession
+    from .models import Card, UserCard, WalkingSession
+    from .progression import level_summary, story_overview
 
-    activity = UserActivity.objects.filter(user=user).first()
+    activity, chapters = story_overview(user)
     sessions = WalkingSession.objects.filter(user=user).order_by("-created_at", "-id")
 
     recent = [
@@ -258,5 +259,14 @@ def build_home_summary(user):
         "cards": {
             "unique_owned": UserCard.objects.filter(user=user).count(),
             "catalog_size": Card.objects.count(),
+        },
+        "level": level_summary(activity),
+        "story": {
+            "unlocked": sum(c["unlocked"] for c in chapters),
+            "total": len(chapters),
+            "next_to_read": next(
+                (c["title"] for c in chapters if c["unlocked"] and not c["completed"]),
+                None,
+            ),
         },
     }

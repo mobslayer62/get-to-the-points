@@ -8,7 +8,12 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from .models import Card, EquippedCard, SessionStart, UserActivity, UserCard, WalkingSession
+from .models import (
+    Card, EquippedCard, SessionStart, StoryProgress, UserActivity, UserCard,
+    WalkingSession,
+)
+from .progression import LEVEL_UP_COSTS, MAX_LEVEL, level_up_cost
+from .story_data import CHAPTERS, CHARACTERS
 from .utils import (
     add_card_to_storage,
     calculate_card_bonuses,
@@ -722,3 +727,220 @@ class SupportCardEffectTests(TestCase):
         self.assertEqual(card["special_type"], "distance_milestone")
         self.assertEqual(card["special_value"], 50)
         self.assertEqual(card["special_threshold"], 5000)
+
+
+class LevelAndStoryRulesTests(TestCase):
+    def test_costs_match_design(self):
+        self.assertEqual(LEVEL_UP_COSTS, {1: 100, 2: 200, 3: 350, 4: 500})
+        self.assertEqual(MAX_LEVEL, 5)
+
+    def test_no_cost_at_max_level(self):
+        self.assertIsNone(level_up_cost(MAX_LEVEL))
+
+    def test_three_placeholder_chapters(self):
+        self.assertEqual(
+            [(c["title"], c["required_level"]) for c in CHAPTERS],
+            [
+                ("Chapter 1: Placeholder title", 1),
+                ("Chapter 2: Placeholder title", 3),
+                ("Chapter 3: Placeholder title", 5),
+            ],
+        )
+
+    def test_placeholder_dialogue_alternates_a_and_b(self):
+        for chapter in CHAPTERS:
+            self.assertEqual(
+                [line["text"] for line in chapter["lines"]],
+                ["Dialog A1", "Dialog B1", "Dialog A2", "Dialog B2", "Dialog A3", "Dialog B3"],
+            )
+            self.assertEqual(
+                [line["speaker"] for line in chapter["lines"]],
+                ["person_a", "person_b"] * 3,
+            )
+
+    def test_every_speaker_is_a_known_character(self):
+        for chapter in CHAPTERS:
+            for line in chapter["lines"]:
+                self.assertIn(line["speaker"], CHARACTERS)
+
+
+class LevelAndStoryApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("storyrunner", password=STRONG_PASSWORD)
+        token = Token.objects.create(user=self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def give_points(self, points):
+        activity, _ = UserActivity.objects.get_or_create(user=self.user)
+        activity.total_points = points
+        activity.save()
+
+    def activity(self):
+        return UserActivity.objects.get(user=self.user)
+
+    # ----- level -----
+
+    def test_new_player_is_level_1(self):
+        res = self.client.get("/api/level/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["level"], 1)
+        self.assertEqual(res.data["next_level_cost"], 100)
+        self.assertFalse(res.data["can_level_up"])
+        self.assertEqual(res.data["next_unlock"]["chapter_id"], "chapter-2")
+
+    def test_level_up_spends_points(self):
+        self.give_points(150)
+        res = self.client.post("/api/level/up/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["points_spent"], 100)
+        self.assertEqual(res.data["level"]["level"], 2)
+        self.assertEqual(self.activity().total_points, 50)
+
+    def test_not_enough_points(self):
+        self.give_points(99)
+        res = self.client.post("/api/level/up/")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("1 more points", res.data["error"])
+        self.assertEqual(self.activity().level, 1)
+        self.assertEqual(self.activity().total_points, 99)
+
+    def test_full_climb_to_max_level(self):
+        self.give_points(100 + 200 + 350 + 500)
+        unlocked = []
+        for _ in range(4):
+            res = self.client.post("/api/level/up/")
+            self.assertEqual(res.status_code, 200)
+            unlocked += [c["id"] for c in res.data["unlocked_chapters"]]
+
+        self.assertEqual(self.activity().level, 5)
+        self.assertEqual(self.activity().total_points, 0)
+        self.assertEqual(unlocked, ["chapter-2", "chapter-3"])
+
+        res = self.client.post("/api/level/up/")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("maximum", res.data["error"])
+
+    def test_level_requires_login(self):
+        self.client.credentials()
+        self.assertEqual(self.client.post("/api/level/up/").status_code, 401)
+
+    # ----- story -----
+
+    def test_story_list(self):
+        res = self.client.get("/api/story/")
+        self.assertEqual(res.status_code, 200)
+        chapters = res.data["chapters"]
+        self.assertEqual(
+            {c["id"]: c["unlocked"] for c in chapters},
+            {"chapter-1": True, "chapter-2": False, "chapter-3": False},
+        )
+        self.assertEqual(chapters[0]["number"], 1)
+        self.assertEqual(chapters[0]["thumbnail"]["name"], "Person A")
+
+    def test_read_unlocked_chapter(self):
+        res = self.client.get("/api/story/chapter-1/")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            [(m["key"], m["position"]) for m in res.data["cast"]],
+            [("person_a", "left"), ("person_b", "right")],
+        )
+        self.assertEqual(res.data["cast"][0]["name"], "Person A")
+        self.assertEqual(res.data["lines"][0], {"speaker": "person_a", "text": "Dialog A1"})
+
+    def test_locked_chapter_is_forbidden(self):
+        res = self.client.get("/api/story/chapter-2/")
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("level 3", res.data["error"])
+
+    def test_chapter_unlocks_after_level_up(self):
+        self.give_points(300)
+        self.client.post("/api/level/up/")
+        self.client.post("/api/level/up/")
+        self.assertEqual(self.client.get("/api/story/chapter-2/").status_code, 200)
+
+    def test_unknown_chapter(self):
+        self.assertEqual(self.client.get("/api/story/nope/").status_code, 404)
+
+    def test_complete_chapter_once(self):
+        first = self.client.post("/api/story/chapter-1/complete/")
+        second = self.client.post("/api/story/chapter-1/complete/")
+        self.assertTrue(first.data["first_time"])
+        self.assertFalse(second.data["first_time"])
+        self.assertEqual(StoryProgress.objects.filter(user=self.user).count(), 1)
+
+        res = self.client.get("/api/story/")
+        done = {c["id"]: c["completed"] for c in res.data["chapters"]}
+        self.assertTrue(done["chapter-1"])
+
+    def test_cannot_complete_locked_chapter(self):
+        res = self.client.post("/api/story/chapter-3/complete/")
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(StoryProgress.objects.count(), 0)
+
+    def test_home_shows_level_and_story(self):
+        res = self.client.get("/api/home/")
+        self.assertEqual(res.data["level"]["level"], 1)
+        self.assertEqual(res.data["story"]["unlocked"], 1)
+        self.assertEqual(res.data["story"]["total"], 3)
+        self.assertEqual(res.data["story"]["next_to_read"], "Chapter 1: Placeholder title")
+
+
+class LevelTabApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("levelrunner", password=STRONG_PASSWORD)
+        token = Token.objects.create(user=self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def set_progress(self, points, level=1):
+        activity, _ = UserActivity.objects.get_or_create(user=self.user)
+        activity.total_points = points
+        activity.level = level
+        activity.save()
+
+    def test_levels_list_costs_and_rewards(self):
+        res = self.client.get("/api/level/")
+        self.assertEqual(res.status_code, 200)
+        levels = res.data["levels"]
+        self.assertEqual([lv["level"] for lv in levels], [1, 2, 3, 4, 5])
+        self.assertEqual([lv["cost"] for lv in levels], [None, 100, 200, 350, 500])
+        self.assertEqual([lv["total_cost"] for lv in levels], [0, 100, 300, 650, 1150])
+        self.assertEqual(
+            [[r["id"] for r in lv["rewards"]] for lv in levels],
+            [["chapter-1"], [], ["chapter-2"], [], ["chapter-3"]],
+        )
+
+    def test_levels_list_state(self):
+        self.set_progress(0, level=3)
+        levels = self.client.get("/api/level/").data["levels"]
+        self.assertEqual([lv["reached"] for lv in levels], [True, True, True, False, False])
+        self.assertEqual([lv["current"] for lv in levels], [False, False, True, False, False])
+
+    def test_next_level_rewards_empty_when_none(self):
+        data = self.client.get("/api/level/").data
+        self.assertEqual(data["next_level"], 2)
+        self.assertEqual(data["next_level_rewards"], [])
+
+    def test_next_level_rewards_lists_chapter(self):
+        self.set_progress(0, level=2)
+        data = self.client.get("/api/level/").data
+        self.assertEqual(data["next_level"], 3)
+        self.assertEqual(
+            data["next_level_rewards"],
+            [{"type": "chapter", "id": "chapter-2", "title": "Chapter 2: Placeholder title"}],
+        )
+
+    def test_max_level_has_no_next(self):
+        self.set_progress(0, level=5)
+        data = self.client.get("/api/level/").data
+        self.assertIsNone(data["next_level"])
+        self.assertIsNone(data["next_level_cost"])
+        self.assertEqual(data["next_level_rewards"], [])
+
+    def test_story_list_level_includes_next_rewards(self):
+        self.set_progress(250, level=2)
+        level = self.client.get("/api/story/").data["level"]
+        self.assertTrue(level["can_level_up"])
+        self.assertEqual(level["next_level_rewards"][0]["id"], "chapter-2")
+

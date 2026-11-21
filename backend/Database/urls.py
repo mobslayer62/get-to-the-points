@@ -14,6 +14,11 @@ from .views import (
     CardStorageView,
     HomeSummaryView,
     EquippedCardsView,
+    LevelView,
+    LevelUpView,
+    StoryListView,
+    StoryChapterView,
+    StoryCompleteView,
 )
 
 router = routers.DefaultRouter()
@@ -32,4 +37,9 @@ urlpatterns = [
     path("card-storage/", CardStorageView.as_view(), name="card-storage"),
     path("equipped-cards/", EquippedCardsView.as_view(), name="equipped-cards"),
     path("home/", HomeSummaryView.as_view(), name="home-summary"),
+    path("level/", LevelView.as_view(), name="level"),
+    path("level/up/", LevelUpView.as_view(), name="level-up"),
+    path("story/", StoryListView.as_view(), name="story-list"),
+    path("story/<slug:chapter_id>/", StoryChapterView.as_view(), name="story-chapter"),
+    path("story/<slug:chapter_id>/complete/", StoryCompleteView.as_view(), name="story-complete"),
 ]

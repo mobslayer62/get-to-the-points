@@ -18,6 +18,9 @@ class UserActivity(models.Model):
     total_points = models.PositiveIntegerField(default=0)
     total_steps = models.PositiveIntegerField(default=0)
 
+    # Story level (1-5). Raised by spending points, see progression.py
+    level = models.PositiveSmallIntegerField(default=1)
+
 class WalkingSession(models.Model):
     session_id = models.UUIDField(
         default=uuid.uuid4,
@@ -287,3 +290,26 @@ def close_gaps_after_card_removed(sender, instance, **kwargs):
 
     for user_id in getattr(instance, "_equipped_user_ids", []):
         compact_equipped_slots(user_id)
+
+
+class StoryProgress(models.Model):
+    """One row per chapter a player has finished reading."""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="story_progress"
+    )
+
+    # Matches an "id" in story_data.CHAPTERS
+    chapter_id = models.CharField(max_length=50)
+
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "chapter_id"],
+                name="unique_chapter_per_user"
+            )
+        ]

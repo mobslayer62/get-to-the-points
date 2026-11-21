@@ -369,3 +369,96 @@ class HomeSummaryView(APIView):
         from .utils import build_home_summary
 
         return Response(build_home_summary(request.user))
+
+
+# ----- Levels and story -----
+
+class LevelView(APIView):
+    """
+    GET the player's level, points, the cost and rewards of the next level,
+    plus the full list of levels for the level tab.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .progression import get_activity, level_summary, levels_overview
+
+        activity = get_activity(request.user)
+        return Response({
+            **level_summary(activity),
+            "levels": levels_overview(activity),
+        })
+
+
+class LevelUpView(APIView):
+    """POST: spend points to go up one level."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .progression import ProgressionError, level_summary, level_up
+
+        try:
+            activity, spent, unlocked = level_up(request.user)
+        except ProgressionError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "points_spent": spent,
+            "unlocked_chapters": [
+                {"id": c["id"], "title": c["title"]} for c in unlocked
+            ],
+            "level": level_summary(activity),
+        })
+
+
+class StoryListView(APIView):
+    """GET every chapter with its locked / completed state."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .progression import level_summary, story_overview
+
+        activity, chapters = story_overview(request.user)
+        return Response({
+            "level": level_summary(activity),
+            "chapters": chapters,
+        })
+
+
+class StoryChapterView(APIView):
+    """GET one chapter's cast and dialogue (only if unlocked)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, chapter_id):
+        from .progression import ProgressionError, chapter_for_reader, readable_chapter
+
+        try:
+            chapter = readable_chapter(request.user, chapter_id)
+        except KeyError:
+            return Response({"error": "Chapter not found."}, status=status.HTTP_404_NOT_FOUND)
+        except ProgressionError as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(chapter_for_reader(chapter))
+
+
+class StoryCompleteView(APIView):
+    """POST when the player reaches the last line of a chapter."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, chapter_id):
+        from .progression import ProgressionError, complete_chapter
+
+        try:
+            first_time = complete_chapter(request.user, chapter_id)
+        except KeyError:
+            return Response({"error": "Chapter not found."}, status=status.HTTP_404_NOT_FOUND)
+        except ProgressionError as e:
+            return Response({"error": str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({"completed": True, "first_time": first_time})
