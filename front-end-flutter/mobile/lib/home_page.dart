@@ -253,7 +253,7 @@ class _MainMenuPageState extends State<MainMenuPage> {
 
               const SizedBox(height: 24),
 
-              // ----- Start run -----
+              // ----- Start tracking -----
               TutorialTarget(
                 id: 'home_start_run',
                 child: SizedBox(
@@ -265,12 +265,12 @@ class _MainMenuPageState extends State<MainMenuPage> {
                     ),
                   ),
                   onPressed: () => _open(const LocationPage()),
-                  child: const Row(
+                  child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.directions_run, size: 40),
-                      SizedBox(width: 16),
-                      Text('Start run', style: TextStyle(fontSize: 24)),
+                      Image.asset('assets/logo/app_mark.png', height: 48),
+                      const SizedBox(width: 16),
+                      const Text('Start Tracking', style: TextStyle(fontSize: 24)),
                     ],
                   ),
                 ),

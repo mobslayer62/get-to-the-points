@@ -93,14 +93,15 @@ class _LoginPageState extends State<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(Icons.directions_run, size: 80, color: colors.primary),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Get to the Points',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineMedium,
+                    // App logo with the name ("GET TO THE / POINTS")
+                    Center(
+                      child: Image.asset(
+                        'assets/logo/app_lockup.png',
+                        height: 88,
+                        semanticLabel: 'Get to the Points',
+                      ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 12),
                     Text(
                       _isRegisterMode ? 'Create an account' : 'Log in to start running',
                       textAlign: TextAlign.center,

@@ -118,7 +118,7 @@ TUTORIAL_STEPS = [
     },
     {
         "id": "start_run_button",
-        "text": "This is the Start Run button. Try tapping it!",
+        "text": "This is the Start Tracking button. Try tapping it!",
         "target": "home_start_run",
         "mode": "tap",
         "advance_on": "open_run",
@@ -149,7 +149,7 @@ TUTORIAL_STEPS = [
     },
     {
         "id": "back_to_run",
-        "text": "Nice! Now go back to the Run screen.",
+        "text": "Nice! Now go back to the Distance Tracking screen.",
         "target": "back",
         "mode": "tap",
         "advance_on": "run_returned",
@@ -158,7 +158,7 @@ TUTORIAL_STEPS = [
         "id": "run",
         "text": (
             "Your card is equipped! When you're ready to walk or run, tap "
-            "Start Run, then tap it again when you finish. No time right now? "
+            "Start Tracking, then tap Stop Tracking when you finish. No time right now? "
             "You can skip the run. Either way, you'll get {bonus} bonus points "
             "for your first tutorial."
         ),

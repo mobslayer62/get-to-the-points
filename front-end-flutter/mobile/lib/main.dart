@@ -726,7 +726,7 @@ class _LocationPageState extends State<LocationPage> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: const Text('Run'),
+        title: const Text('Distance Tracking'),
         centerTitle: true,
       ),
 
@@ -750,7 +750,7 @@ class _LocationPageState extends State<LocationPage> {
                 ),
                 icon: Icon(isTracking ? Icons.stop : Icons.play_arrow),
                 label: Text(
-                  isTracking ? 'Stop Run' : 'Start Run',
+                  isTracking ? 'Stop Tracking' : 'Start Tracking',
                   style: const TextStyle(fontSize: 18),
                 ),
               ),
@@ -786,11 +786,7 @@ class _LocationPageState extends State<LocationPage> {
 
                 const SizedBox(height: 20),
 
-                const Icon(
-                  Icons.directions_run,
-                  size: 60,
-                  color: Colors.green,
-                ),
+                Image.asset('assets/logo/app_icon.png', height: 72),
 
                 const SizedBox(height: 10),
 
