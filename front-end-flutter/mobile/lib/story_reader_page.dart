@@ -6,8 +6,10 @@ import 'api_service.dart';
 import 'equip_cards_page.dart' show CardArt, rarityColor;
 import 'story_widgets.dart';
 
-/// Visual-novel reader. The chapter's cast stands on screen; whoever is
-/// speaking is highlighted and the others are dimmed.
+/// Visual-novel reader. Characters stand on screen while they are in the
+/// scene (the server sends who is on stage for every line); whoever is
+/// speaking is highlighted and the others are dimmed. The current place is
+/// shown at the top of the stage.
 /// Tap anywhere: if the line is still typing, show it all; otherwise go to
 /// the next line. The last tap marks the chapter as read.
 class StoryReaderPage extends StatefulWidget {
@@ -67,6 +69,14 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
   String get _currentText => (_line['text'] as String?) ?? '';
   String get _speakerKey => (_line['speaker'] as String?) ?? '';
   bool get _isTyping => _visibleChars < _currentText.length;
+  String get _scene => (_line['scene'] as String?) ?? '';
+
+  /// Whether a cast member is on stage for the current line.
+  /// Older chapters without "on_stage" show the whole cast.
+  bool _isOnStage(dynamic member) {
+    final onStage = _line['on_stage'] as List<dynamic>?;
+    return onStage == null || onStage.contains(member['key']);
+  }
 
   Map<String, dynamic>? get _speaker {
     for (final member in _cast) {
@@ -169,25 +179,30 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
                   (stage.maxHeight * 0.9).clamp(80.0, 260.0).toDouble();
               return Stack(
                 children: [
-                  const Positioned.fill(
-                    child: Center(
-                      child: Text(
-                        'Background placeholder',
-                        style: TextStyle(color: Colors.white24, fontSize: 16),
-                      ),
+                  // Where the scene takes place
+                  if (_scene.isNotEmpty)
+                    Positioned(
+                      top: 8,
+                      left: 16,
+                      right: 16,
+                      child: Center(child: _SceneLabel(scene: _scene)),
                     ),
-                  ),
+                  // Characters fade in when they enter and out when they leave
                   for (final member in _cast)
                     Align(
                       alignment: _alignmentFor(member['position'] as String?),
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 200),
-                        scale: member['key'] == _speakerKey ? 1.05 : 1.0,
-                        alignment: Alignment.bottomCenter,
-                        child: PlaceholderSprite(
-                          character: member as Map<String, dynamic>,
-                          height: spriteHeight,
-                          dimmed: member['key'] != _speakerKey,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 250),
+                        opacity: _isOnStage(member) ? 1 : 0,
+                        child: AnimatedScale(
+                          duration: const Duration(milliseconds: 200),
+                          scale: member['key'] == _speakerKey ? 1.05 : 1.0,
+                          alignment: Alignment.bottomCenter,
+                          child: PlaceholderSprite(
+                            character: member as Map<String, dynamic>,
+                            height: spriteHeight,
+                            dimmed: member['key'] != _speakerKey,
+                          ),
                         ),
                       ),
                     ),
@@ -222,6 +237,42 @@ class _StoryReaderPageState extends State<StoryReaderPage> {
         ),
       ),
       body: SafeArea(child: content),
+    );
+  }
+}
+
+/// Small pill at the top of the stage naming the current place.
+class _SceneLabel extends StatelessWidget {
+  final String scene;
+
+  const _SceneLabel({required this.scene});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 300),
+      child: Container(
+        key: ValueKey(scene),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black26,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.place, size: 16, color: Colors.white70),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                scene,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

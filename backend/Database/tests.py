@@ -3,7 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
@@ -17,6 +17,7 @@ from .models import (
 )
 from .progression import LEVEL_UP_COSTS, MAX_LEVEL, level_up_cost
 from .story_data import CHAPTERS, CHARACTERS
+from .story_script import ScriptError, parse_script
 from .utils import (
     add_card_to_storage,
     calculate_card_bonuses,
@@ -743,31 +744,90 @@ class LevelAndStoryRulesTests(TestCase):
     def test_no_cost_at_max_level(self):
         self.assertIsNone(level_up_cost(MAX_LEVEL))
 
-    def test_three_placeholder_chapters(self):
+    def test_three_chapters(self):
         self.assertEqual(
             [(c["title"], c["required_level"]) for c in CHAPTERS],
             [
-                ("Chapter 1: Placeholder title", 1),
-                ("Chapter 2: Placeholder title", 3),
-                ("Chapter 3: Placeholder title", 5),
+                ("Chapter 1: Get to the Point", 1),
+                ("Chapter 2: A Clean Slate", 3),
+                ("Chapter 3: The Starting Line", 5),
             ],
         )
 
-    def test_placeholder_dialogue_alternates_a_and_b(self):
-        for chapter in CHAPTERS:
-            self.assertEqual(
-                [line["text"] for line in chapter["lines"]],
-                ["Dialog A1", "Dialog B1", "Dialog A2", "Dialog B2", "Dialog A3", "Dialog B3"],
-            )
-            self.assertEqual(
-                [line["speaker"] for line in chapter["lines"]],
-                ["person_a", "person_b"] * 3,
-            )
+    def test_chapters_start_and_end_where_the_story_does(self):
+        first, second, third = CHAPTERS
+        self.assertTrue(first["lines"][0]["text"].startswith("At the bus stop"))
+        self.assertEqual(first["lines"][0]["scene"], "NTHU Front Gate")
+        self.assertTrue(second["lines"][0]["text"].startswith("Walking inside"))
+        self.assertEqual(second["lines"][0]["scene"], "Hsin Dorm")
+        self.assertEqual(third["lines"][-1], {
+            "speaker": "me",
+            "text": "【…Yeah. I’m cooked.】",
+            "scene": "4 weeks later | Classroom 218",
+            "on_stage": ["me", "professor", "classmate"],
+        })
 
     def test_every_speaker_is_a_known_character(self):
         for chapter in CHAPTERS:
             for line in chapter["lines"]:
-                self.assertIn(line["speaker"], CHARACTERS)
+                if line["speaker"]:
+                    self.assertIn(line["speaker"], CHARACTERS)
+                    # nobody talks from off stage
+                    self.assertIn(line["speaker"], line["on_stage"])
+
+    def test_varsity_guy_leaves_in_chapter_1(self):
+        lines = CHAPTERS[0]["lines"]
+        self.assertNotIn("student", lines[0]["on_stage"])
+        self.assertIn("student", [l["speaker"] for l in lines])
+        self.assertNotIn("student", lines[-1]["on_stage"])
+
+
+class StoryScriptTests(SimpleTestCase):
+    CAST = ["me", "friend"]
+
+    def test_narration_speech_and_stage(self):
+        lines = parse_script("""
+            # comment
+            [scene: Gate]
+            [enter: me]
+            The bus left.
+            me: 【Here I am.】
+            [enter: friend]
+            friend: “Hi!”
+            [exit: friend]
+            Done.
+        """, self.CAST)
+        self.assertEqual(lines, [
+            {"speaker": "", "text": "The bus left.", "scene": "Gate", "on_stage": ["me"]},
+            {"speaker": "me", "text": "【Here I am.】", "scene": "Gate", "on_stage": ["me"]},
+            {"speaker": "friend", "text": "“Hi!”", "scene": "Gate", "on_stage": ["me", "friend"]},
+            {"speaker": "", "text": "Done.", "scene": "Gate", "on_stage": ["me"]},
+        ])
+
+    def test_enter_several_and_cast_order(self):
+        lines = parse_script("[enter: friend, me]\nHello.", self.CAST)
+        self.assertEqual(lines[0]["on_stage"], ["me", "friend"])
+
+    def test_colon_inside_narration_is_not_a_speaker(self):
+        lines = parse_script("[enter: me]\nMeanwhile, I had nothing: just this.", self.CAST)
+        self.assertEqual(lines[0]["speaker"], "")
+
+    def test_mistakes_are_reported_with_line_numbers(self):
+        bad_scripts = {
+            "me: talking before entering": "not on stage",
+            "[enter: ghost]": "not in this chapter's cast",
+            "[enter: me]\n[enter: me]": "already on stage",
+            "[exit: me]": "not on stage",
+            "[enter: me]\nstranger: hi": "unknown speaker",
+            "[jump: me]": "unknown command",
+            "[enter: me]": "no lines",
+        }
+        for script, message in bad_scripts.items():
+            with self.subTest(script=script):
+                with self.assertRaisesRegex(ScriptError, message):
+                    parse_script(script, self.CAST, name="test")
+        with self.assertRaisesRegex(ScriptError, "test, script line 2"):
+            parse_script("[enter: me]\n[enter: ghost]", self.CAST, name="test")
 
 
 class LevelAndStoryApiTests(TestCase):
@@ -842,17 +902,21 @@ class LevelAndStoryApiTests(TestCase):
             {"chapter-1": True, "chapter-2": False, "chapter-3": False},
         )
         self.assertEqual(chapters[0]["number"], 1)
-        self.assertEqual(chapters[0]["thumbnail"]["name"], "Person A")
+        self.assertEqual(chapters[0]["thumbnail"]["name"], "Varsity Jacket Guy")
+        self.assertEqual(chapters[0]["title"], "Chapter 1: Get to the Point")
 
     def test_read_unlocked_chapter(self):
         res = self.client.get("/api/story/chapter-1/")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(
             [(m["key"], m["position"]) for m in res.data["cast"]],
-            [("person_a", "left"), ("person_b", "right")],
+            [("me", "left"), ("student", "right")],
         )
-        self.assertEqual(res.data["cast"][0]["name"], "Person A")
-        self.assertEqual(res.data["lines"][0], {"speaker": "person_a", "text": "Dialog A1"})
+        self.assertEqual(res.data["cast"][0]["name"], "Me")
+        first = res.data["lines"][0]
+        self.assertEqual(first["speaker"], "")
+        self.assertEqual(first["scene"], "NTHU Front Gate")
+        self.assertEqual(first["on_stage"], ["me"])
 
     def test_locked_chapter_is_forbidden(self):
         res = self.client.get("/api/story/chapter-2/")
@@ -889,7 +953,7 @@ class LevelAndStoryApiTests(TestCase):
         self.assertEqual(res.data["level"]["level"], 1)
         self.assertEqual(res.data["story"]["unlocked"], 1)
         self.assertEqual(res.data["story"]["total"], 3)
-        self.assertEqual(res.data["story"]["next_to_read"], "Chapter 1: Placeholder title")
+        self.assertEqual(res.data["story"]["next_to_read"], "Chapter 1: Get to the Point")
 
 
 class LevelTabApiTests(TestCase):
@@ -934,7 +998,7 @@ class LevelTabApiTests(TestCase):
         self.assertEqual(data["next_level"], 3)
         self.assertEqual(
             data["next_level_rewards"],
-            [{"type": "chapter", "id": "chapter-2", "title": "Chapter 2: Placeholder title"}],
+            [{"type": "chapter", "id": "chapter-2", "title": "Chapter 2: A Clean Slate"}],
         )
 
     def test_max_level_has_no_next(self):
