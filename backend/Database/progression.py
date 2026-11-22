@@ -142,8 +142,8 @@ def story_overview(user):
             "number": c["number"],
             "title": c["title"],
             "summary": c["summary"],
-            # first cast member = the thumbnail in the list
-            "thumbnail": character_info(c["cast"][0]["character"]),
+            # the chapter's chosen thumbnail, or else its first cast member
+            "thumbnail": character_info(c.get("thumbnail") or c["cast"][0]["character"]),
             "required_level": c["required_level"],
             "unlocked": is_unlocked(c, activity.level),
             "completed": c["id"] in completed,
