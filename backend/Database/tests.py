@@ -1,3 +1,4 @@
+import math
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -18,6 +19,7 @@ from .models import (
 from .progression import LEVEL_UP_COSTS, MAX_LEVEL, level_up_cost
 from .story_data import CHAPTERS, CHARACTERS
 from .story_script import ScriptError, parse_script
+from .gps_distance import DistanceFilter, raw_distance, track_distance
 from .utils import (
     add_card_to_storage,
     calculate_card_bonuses,
@@ -215,6 +217,32 @@ class FinishSessionApiTests(TestCase):
         res = self.post_session(distance="5000.00", duration_seconds=60)
         self.assertEqual(res.status_code, 400)
         self.assertFalse(WalkingSession.objects.filter(user=self.user).exists())
+
+    def test_server_measures_distance_from_track(self):
+        # The phone claims 9999 m, but its GPS points show a 400 m lap.
+        track = simulated_track(track_lap(1.4), 400 / 1.4, interval=3, seed=1, speed=1.4)
+        res = self.post_session(distance="9999.00", duration_seconds=286, track=track)
+        self.assertEqual(res.status_code, 200)
+        measured = float(res.data["session_distance"])
+        self.assertTrue(380 <= measured <= 420, measured)
+        self.assertEqual(res.data["base_points"], int(measured) // 10)
+
+    def test_standing_still_track_earns_nothing(self):
+        track = simulated_track(lambda t: (0.0, 0.0), 600, interval=1, seed=2, speed=0)
+        res = self.post_session(distance="500.00", duration_seconds=600, track=track)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["session_distance"], "0.00")
+        self.assertEqual(res.data["points_earned"], 0)
+
+    def test_broken_track_is_rejected(self):
+        res = self.post_session(track=[[24.79, 120.99, 5.0]])   # missing the time
+        self.assertEqual(res.status_code, 400)
+        res = self.post_session(track=[["a", "b", "c", "d"]])
+        self.assertEqual(res.status_code, 400)
+
+    def test_old_app_without_track_still_works(self):
+        res = self.post_session(distance="1000.00")
+        self.assertEqual(res.data["session_distance"], "1000.00")
 
     def test_history_and_stats(self):
         self.post_session(distance="500.00")
@@ -1319,3 +1347,114 @@ class OnboardingTests(TestCase):
         client = APIClient()
         self.assertEqual(client.get("/api/tutorial/").status_code, 401)
         self.assertEqual(client.post("/api/tutorial/run-bonus/").status_code, 401)
+
+
+# ----- simulated GPS, used by the distance tests -----
+# Like a real phone: the error drifts slowly (a few metres over ~30 s), plus a
+# little jitter each reading and the odd big glitch with a bad accuracy.
+
+SIM_LAT, SIM_LNG = 24.7940, 120.9930   # NTHU
+SIM_M_LAT = 1 / 111_320
+SIM_M_LNG = 1 / (111_320 * math.cos(math.radians(SIM_LAT)))
+
+
+def track_lap(speed):
+    """Position (x, y in metres) at time t on a 400 m athletics track."""
+    straight, r = 84.39, 36.5
+
+    def where(t):
+        s = (t * speed) % 400.0
+        if s < straight:
+            return (s, 0.0)
+        s -= straight
+        if s < math.pi * r:
+            a = s / r
+            return (straight + r * math.sin(a), r - r * math.cos(a))
+        s -= math.pi * r
+        if s < straight:
+            return (straight - s, 2 * r)
+        a = (s - straight) / r
+        return (-r * math.sin(a), r + r * math.cos(a))
+
+    return where
+
+
+def simulated_track(path, seconds, interval, seed, speed, steps_on=True):
+    rnd = random.Random(seed)
+    ex = ey = 0.0
+    keep = math.exp(-interval / 30.0)
+    points, t = [], 0.0
+    while t <= seconds:
+        ex = keep * ex + math.sqrt(1 - keep * keep) * rnd.gauss(0, 4.0)
+        ey = keep * ey + math.sqrt(1 - keep * keep) * rnd.gauss(0, 4.0)
+        x, y = path(t)
+        x += ex + rnd.gauss(0, 1.5)
+        y += ey + rnd.gauss(0, 1.5)
+        accuracy = rnd.uniform(4, 12)
+        if rnd.random() < 0.01:                      # a GPS glitch
+            x += rnd.uniform(-40, 40)
+            y += rnd.uniform(-40, 40)
+            accuracy = rnd.uniform(15, 35)
+        steps = int(t * speed / 0.75) if steps_on else -1
+        points.append([SIM_LAT + y * SIM_M_LAT, SIM_LNG + x * SIM_M_LNG, accuracy, t, steps])
+        t += interval
+    return points
+
+
+class GpsDistanceTests(SimpleTestCase):
+    def assertNear(self, value, target, tolerance):
+        self.assertTrue(abs(value - target) <= tolerance, f"{value:.0f} m, expected {target} m")
+
+    def test_old_method_overcounts(self):
+        # The bug this module fixes: 400 m measured as ~500 m.
+        track = simulated_track(track_lap(1.4), 400 / 1.4, interval=3, seed=3, speed=1.4)
+        self.assertGreater(raw_distance(track), 450)
+
+    def test_walking_one_lap(self):
+        for seed in range(5):
+            for interval in (1, 3):
+                track = simulated_track(track_lap(1.4), 400 / 1.4, interval, seed, speed=1.4)
+                self.assertNear(track_distance(track), 400, 40)
+
+    def test_running_one_lap(self):
+        for seed in range(5):
+            for interval in (1, 3):
+                track = simulated_track(track_lap(3.0), 400 / 3.0, interval, seed, speed=3.0)
+                self.assertNear(track_distance(track), 400, 40)
+
+    def test_standing_still_with_step_counter_is_zero(self):
+        for seed in range(5):
+            track = simulated_track(lambda t: (0.0, 0.0), 600, 1, seed, speed=0)
+            self.assertEqual(track_distance(track), 0)
+
+    def test_standing_still_without_step_counter_stays_small(self):
+        for seed in range(5):
+            track = simulated_track(lambda t: (0.0, 0.0), 600, 1, seed, speed=0, steps_on=False)
+            self.assertLess(track_distance(track), 200)   # the old method: ~2 km
+
+    def test_inaccurate_readings_are_ignored(self):
+        f = DistanceFilter()
+        f.add(SIM_LAT, SIM_LNG, 5, 0, 0)
+        f.add(SIM_LAT + 500 * SIM_M_LAT, SIM_LNG, 80, 10, 20)   # 500 m away, 80 m accuracy
+        self.assertEqual(f.finish(), 0)
+
+    def test_impossible_jump_is_ignored(self):
+        f = DistanceFilter()
+        f.add(SIM_LAT, SIM_LNG, 5, 0, 0)
+        f.add(SIM_LAT + 300 * SIM_M_LAT, SIM_LNG, 5, 1, 2)     # 300 m in one second
+        self.assertEqual(f.finish(), 0)
+
+    def test_straight_walk_with_good_gps(self):
+        f = DistanceFilter()
+        for t in range(0, 201):                                 # 1.5 m/s for 200 s
+            f.add(SIM_LAT + 1.5 * t * SIM_M_LAT, SIM_LNG, 5, t, t * 2)
+        self.assertNear(f.finish(), 300, 10)
+
+    def test_time_going_backwards_is_ignored(self):
+        f = DistanceFilter()
+        f.add(SIM_LAT, SIM_LNG, 5, 10, 0)
+        f.add(SIM_LAT + 50 * SIM_M_LAT, SIM_LNG, 5, 5, 10)
+        self.assertEqual(f.finish(), 0)
+
+    def test_empty_track(self):
+        self.assertEqual(track_distance([]), 0)

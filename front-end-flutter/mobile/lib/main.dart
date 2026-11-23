@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'api_service.dart';
 import 'equip_cards_page.dart';
+import 'gps_distance.dart';
 import 'login_page.dart';
 import 'tutorial.dart';
 import 'package:flutter/material.dart';
@@ -53,10 +54,15 @@ class _LocationPageState extends State<LocationPage> {
   int elapsedSeconds = 0;
 
   // GPS variables
-  Position? previousPosition;
   StreamSubscription<Position>? positionStream;
 
+  // Filters out GPS wobble (same rules as the server, see gps_distance.dart).
+  DistanceFilter distanceFilter = DistanceFilter();
   double totalDistance = 0;
+
+  // Raw GPS points for this run, sent to the server, which measures the
+  // official distance from them: [lat, lng, accuracy, seconds, steps].
+  List<List<num>> track = [];
 
   // GPS debugging variables
   int gpsUpdateCount = 0;
@@ -86,6 +92,7 @@ class _LocationPageState extends State<LocationPage> {
   // The session id is kept so retrying never awards points twice.
   String? pendingSessionId;
   double pendingDistance = 0;
+  List<List<num>> pendingTrack = [];
   int pendingSteps = 0;
   int pendingDuration = 0;
 
@@ -206,6 +213,7 @@ class _LocationPageState extends State<LocationPage> {
       final result = await ApiService.finishSession(
         sessionId: sessionId,
         distanceMeters: pendingDistance,
+        track: pendingTrack,
         steps: pendingSteps,
         durationSeconds: pendingDuration,
       );
@@ -417,13 +425,14 @@ class _LocationPageState extends State<LocationPage> {
         locationSettings: locationSettings,
       );
 
-      previousPosition = initialPosition;
-
       // Reset session values
       totalDistance = 0;
       totalSteps = 0;
+      distanceFilter = DistanceFilter();
+      track = [];
 
       runStartTime = DateTime.now();
+      recordPoint(initialPosition, stepAvailable);
       tutorial.report('run_started');
 
       setState(() {
@@ -506,8 +515,11 @@ class _LocationPageState extends State<LocationPage> {
             'GPS ACCURACY: ${currentPosition.accuracy} meters',
           );
 
+          // Every reading is kept for the server, which filters them itself.
+          recordPoint(currentPosition, stepAvailable);
+
           // Check GPS accuracy
-          if (currentPosition.accuracy > 60) {
+          if (currentPosition.accuracy > DistanceFilter.maxAccuracy) {
             if (mounted) {
               setState(() {
                 gpsDebugMessage =
@@ -520,20 +532,6 @@ class _LocationPageState extends State<LocationPage> {
 
             return;
           }
-
-          // Calculate distance
-          if (previousPosition != null) {
-            double distance = Geolocator.distanceBetween(
-              previousPosition!.latitude,
-              previousPosition!.longitude,
-              currentPosition.latitude,
-              currentPosition.longitude,
-            );
-
-            totalDistance += distance;
-          }
-
-          previousPosition = currentPosition;
 
           // Update phone display
           if (mounted) {
@@ -595,6 +593,28 @@ class _LocationPageState extends State<LocationPage> {
     }
   }
 
+  /// Saves one GPS reading to the track and updates the live distance.
+  void recordPoint(Position position, bool stepAvailable) {
+    final start = runStartTime;
+    if (start == null) return;
+    final seconds = DateTime.now().difference(start).inMilliseconds / 1000;
+    final steps = stepAvailable ? totalSteps : -1;
+    track.add([
+      double.parse(position.latitude.toStringAsFixed(6)),
+      double.parse(position.longitude.toStringAsFixed(6)),
+      double.parse(position.accuracy.toStringAsFixed(1)),
+      double.parse(seconds.toStringAsFixed(1)),
+      steps,
+    ]);
+    totalDistance = distanceFilter.add(
+      position.latitude,
+      position.longitude,
+      position.accuracy,
+      seconds,
+      steps,
+    );
+  }
+
   // Stop tracking
   Future<void> stopTracking({bool submit = true}) async {
     // Cancel watchdog
@@ -623,6 +643,9 @@ class _LocationPageState extends State<LocationPage> {
           'Updates received: $gpsUpdateCount';
     });
 
+    // Count the last few metres the smoothing hadn't caught up with yet.
+    totalDistance = distanceFilter.finish();
+
     print('Distance: $totalDistance meters');
     print('Steps: $totalSteps');
     print('Duration: $duration seconds');
@@ -638,6 +661,7 @@ class _LocationPageState extends State<LocationPage> {
     }
     pendingSessionId = sessionId;
     pendingDistance = totalDistance;
+    pendingTrack = track;
     pendingSteps = totalSteps;
     pendingDuration = duration;
 

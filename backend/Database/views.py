@@ -146,7 +146,10 @@ class StartSessionView(APIView):
 
 class FinishSessionView(APIView):
     """
-    POST {session_id, distance, steps, duration_seconds}
+    POST {session_id, distance, steps, duration_seconds, track}
+
+    track (optional) is the list of raw GPS points; when it is sent, the
+    distance is calculated here from the points (see gps_distance.py).
 
     The session_id must come from a run started with start-session.
     Sending the same session_id twice never awards points twice, so the app

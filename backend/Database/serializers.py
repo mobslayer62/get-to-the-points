@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from django.contrib.auth.models import Group, User
 from django.contrib.auth.password_validation import validate_password
@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import EquippedCard, UserActivity, UserCard, WalkingSession
+from .gps_distance import MAX_POINTS, track_distance
 from .utils import find_session_problem
 
 
@@ -71,8 +72,25 @@ class FinishSessionSerializer(serializers.Serializer):
     )
     steps = serializers.IntegerField(min_value=0, required=False, default=0)
     duration_seconds = serializers.IntegerField(min_value=0, required=False, default=0)
+    # Raw GPS points: [lat, lng, accuracy_m, seconds, steps]. When the app
+    # sends them, the server works out the distance itself (gps_distance.py)
+    # and the phone's own distance is ignored. Older app versions don't send
+    # a track, so their distance is used as before.
+    track = serializers.ListField(
+        child=serializers.ListField(
+            child=serializers.FloatField(), min_length=4, max_length=5
+        ),
+        required=False,
+        max_length=MAX_POINTS,
+    )
 
     def validate(self, data):
+        track = data.pop("track", None)
+        if track is not None:
+            # Always 2 decimal places, like the distance the app sends.
+            data["distance"] = Decimal(str(track_distance(track))).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
         problem = find_session_problem(data["distance"], data["duration_seconds"])
         if problem:
             raise serializers.ValidationError({"error": problem})
