@@ -91,6 +91,7 @@ class ApiService {
     required double distanceMeters,
     required int steps,
     required int durationSeconds,
+    List<List<num>>? track,
   }) {
     return _send(() => http.post(
           Uri.parse('$baseUrl/finish-session/'),
@@ -100,6 +101,8 @@ class ApiService {
             'distance': distanceMeters.toStringAsFixed(2),
             'steps': steps,
             'duration_seconds': durationSeconds,
+            // The server measures the distance from these GPS points.
+            if (track != null) 'track': track,
           }),
         ));
   }
